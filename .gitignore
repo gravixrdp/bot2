@@ -1,0 +1,16 @@
+bot1/
+.cache/
+.cursor/
+.cursor-server/
+.bash_history
+.bash_logout
+.bashrc
+.profile
+.viminfo
+.sudo_as_admin_successful
+.git-credentials
+*.log
+.env
+venv/
+__pycache__/
+*.pyc

@@ -1,0 +1,58 @@
+{
+  "users": {
+    "6649712542": {
+      "id": 6649712542,
+      "name": "",
+      "is_premium": true,
+      "premium_expiry": "2025-10-24T20:42:34.627506"
+    },
+    "5610858626": {
+      "id": 5610858626,
+      "name": "",
+      "is_premium": true,
+      "premium_expiry": "2026-10-14T20:38:50.324817"
+    }
+  },
+  "bots": {
+    "b5610858626-1760474110": {
+      "id": "b5610858626-1760474110",
+      "owner_id": 5610858626,
+      "name": "sample_bold_bot",
+      "token": "",
+      "path": "/home/ubuntu/bot1/data/uploads/5610858626/b5610858626-1760474110",
+      "status": "stopped",
+      "runtime_id": null,
+      "created_at": "2025-10-14T20:35:10.126860",
+      "started_at": "2025-10-14T20:35:26.479136",
+      "plan": "free"
+    },
+    "b5610858626-1760474458": {
+      "id": "b5610858626-1760474458",
+      "owner_id": 5610858626,
+      "name": "file-ljc",
+      "token": "",
+      "path": "/home/ubuntu/bot1/data/uploads/5610858626/b5610858626-1760474458",
+      "status": "running",
+      "runtime_id": "aaaba208e46d3048a8cf302923eeac1463ced6dc14340104b3ee461f61a67d29",
+      "created_at": "2025-10-14T20:40:58.641729",
+      "started_at": "2025-10-14T20:41:34.169169",
+      "plan": "premium"
+    }
+  },
+  "logs": [
+    {
+      "time": "2025-10-14T20:42:13.964335",
+      "event": "Admin 5610858626 cleared admin logs",
+      "scope": "admin"
+    }
+  ],
+  "messages": [],
+  "settings": {
+    "free_duration_minutes": 60,
+    "restart_policy": "on",
+    "cpu_limit": "0.5",
+    "mem_limit": "256m",
+    "network": null,
+    "run_mode": "runner"
+  }
+}

@@ -1,0 +1,6 @@
+aiogram==3.13.1
+docker==7.1.0
+aiofiles==24.1.0
+python-dotenv==1.0.1
+uvloop==0.20.0
+requests==2.32.3

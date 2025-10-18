@@ -1,0 +1,5 @@
+[user]
+	name = gravixrdp
+	email = gravixrdp@users.noreply.github.com
+[credential]
+	helper = store
