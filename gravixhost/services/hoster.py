@@ -586,7 +586,13 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
 
     framework, token_var = detect_framework(code)
     reqs = guess_requirements(framework)
-
+    # Ensure dotenv is available so user code using .env works seamlessly
+    try:
+        if 'python-dotenv' not in reqs:
+            reqs.append('python-dotenv')
+    except Exception:
+        reqs = reqs or []
+        reqs.append('python-dot
     # Validate user-provided token online to avoid silent failures
     token_ok = _validate_user_token_online(token)
     if token_ok is False:
@@ -601,6 +607,15 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
             f.write(code)
         with open(os.path.join(temp_dir, "requirements.txt"), "w", encoding="utf-8") as f:
             f.write("\n".join(reqs) if reqs else "")
+        # Write a .env so user code loading dotenv can pick up the token automatically
+        try:
+            with open(os.path.join(temp_dir, ".env"), "w", encoding="utf-8") as enf:
+                enf.write(f"BOT_TOKEN={token}\n")
+                enf.write(f"TELEGRAM_TOKEN={token}\n")
+                enf.write(f"TOKEN={token}\n")
+                enf.write(f"TELEGRAM_BOT_TOKEN={token}\n")
+        except Exception:
+            pass
 
         # Write runner with heartbeat and token injection
         runner_code = f"""import os, runpy, sys, subprocess, threading, time, re
@@ -610,8 +625,14 @@ os.environ['BOT_TOKEN'] = token
 os.environ['TELEGRAM_TOKEN'] = token
 os.environ['TOKEN'] = token
 os.environ['TELEGRAM_BOT_TOKEN'] = token
+# Load .env if available so user's code relying on dotenv works
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
 # Prepare globals so user code can reference BOT_TOKEN or TOKEN directly
-init_globals = {{'BOT_TOKEN': token, 'TOKEN': token, 'TELEGRAM_TOKEN': token}}
+init_globals = {'BOT_TOKEN': token, 'TOKEN': token, 'TELEGRAM_TOKEN': token}
 # Ensure current working directory is the app root
 os.chdir(os.path.dirname(__file__))
 
@@ -636,7 +657,7 @@ except ModuleNotFoundError as e:
         m = re.search(r"No module named ['\\\"]([^'\\\"]+)['\\\"]", str(e))
         if m:
             missing = m.group(1)
-    _MAP = {{
+    _MAP = {
         'telebot': 'pyTelegramBotAPI',
         'telegram': 'python-telegram-bot',
         'PIL': 'pillow',
@@ -645,7 +666,7 @@ except ModuleNotFoundError as e:
         'yaml': 'pyyaml',
         'Crypto': 'pycryptodome',
         'OpenSSL': 'pyOpenSSL',
-    }}
+    }
     pkg = _MAP.get(missing)
     if pkg:
         print('gravix_runner: auto-installing %s for missing module %s' % (pkg, missing))
