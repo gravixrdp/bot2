@@ -996,9 +996,6 @@ async def on_feedback_text(message: Message):
 
 @router.message(F.photo, F.caption.regexp(r"(?i)^feedback:"))
 async def on_feedback_photo(message: Message):
-    # Acknowledge and direct user to support bot for screenshots
-    await      await message.answer("✅ Received your screenshot. Thank you!", parse_mode=ParseMode.HTML)
-        return
     try:
         photo = message.photo[-1]  # largest size
         await message.bot.send_photo(
@@ -1017,9 +1014,6 @@ async def on_feedback_document(message: Message):
     try:
         await message.bot.send_document(
             chat_id=ADMIN_TELEGRAM_ID,
-            document=message.document.file_id,
-            caption=f"📄 Feedback attachment from {bold(message.from_user.full_name)} ({code    parse_mode=ParseMode.HTML,
-   GRAM_ID,
             document=message.document.file_id,
             caption=f"📄 Feedback attachment from {bold(message.from_user.full_name)} ({code(str(message.from_user.id))}):\n{message.caption}",
             parse_mode=ParseMode.HTML,
