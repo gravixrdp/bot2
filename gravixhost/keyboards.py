@@ -141,7 +141,7 @@ def admin_fixed_bar() -> InlineKeyboardMarkup:
 def support_url_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Open Support Chat", url="https://t.me/Dravonnbot")]
+            [InlineKeyboardButton(text="Open Support Chat", url="https://t.me/dravonnbot")]
         ]
     )
 

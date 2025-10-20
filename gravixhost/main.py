@@ -148,14 +148,28 @@ def _detect_entry(workspace: str, uploaded_filename: str) -> str:
 
 @router.message(Command("upgrade"))
 async def cmd_upgrade(message: Message):
+    user = get_user(message.from_user.id)
     text = (
         f"{bold('💎 Upgrade to Premium')}\n"
         "• Unlimited uptime\n"
         "• Host multiple bots\n"
         "• Priority support\n\n"
-        "Contact admin via the button (for premium users) or reply here with your request."
+        "Free users: contact our admin at " + bold("@dravonnbot") + " to upgrade.\n"
+        "Premium users: you can also use the '💬 Contact Admin' button from the menu."
     )
-    await message.answer(text, reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")), parse_mode=ParseMode.HTML)
+    # First send upgrade details with a direct contact button
+    await message.answer(text, reply_markup=support_url_kb(), parse_mode=ParseMode.HTML)
+    # Then show the main menu so users can continue using the bot
+    await message.answer(bold("🏠 Main Menu"), reply_markup=main_menu(user.get("is_premium"), show_admin=is_admin(message.from_user.id)), parse_mode=ParseMode.HTML)grade"))
+async def cmd_upgrade(message: Message):
+    user = get_user(message.from_user.id)
+    text = (
+        f"{bold('💎 Upgrade to Premium')}\n"
+        "• Unlimited uptime\n"
+        "• Host multiple bots\n"
+        "• Priority support\n\n"
+        "Free users: admin se upgrade ke liye DM karein " + bold("@dravonnbot") + ".\n"
+        "Premium users: aap 'r(message.from_user.id).get("is_premium")), parse_mode=ParseMode.HTML)
 
 
 @router.message(Command("host"))
@@ -668,14 +682,14 @@ async def handle_token(message: Message, state: FSMContext):
         if err == "docker_unavailable":
             base_msg = (
                 bold("⚠️ Hosting service not available") + "\n"
-                + "System thoda busy ya unavailable hai. Please try again after some time."
+                + "The hosting service is currently busy or unavailable. Please try again later."
             )
         elif err == "build_error":
             base_msg = (
                 bold("⚠️ Build failed") + "\n"
-                + "Kuch dependencies or imports resolve nahi ho rahe.\n"
+                + "Some dependencies or imports could not be resolved.\n"
                 + "• Check your requirements.txt (spelling and versions)\n"
-                + "• Ensure entry file runs locally: " + code(f"python {pending.entry_name or 'your_file.py'}")
+                +"• Ensure entry file runs locally: " + code(f"python {pending.entry_name or 'your_file.py'}")
             )
         elif err == "no_entry_py":
             base_msg = (
@@ -727,7 +741,7 @@ async def handle_token(message: Message, state: FSMContext):
         "• A screenshot of your hosted bot running\n"
         "• A screenshot of your current chat in GRAVIXVPS\n"
         "• Your feedback about the platform (what did you like, what can be improved)\n\n"
-        "Submit your feedback and screenshots to our support bot: " + bold("@Dravonnbot") + ".\n"
+        "Submit your feedback and screenshots to our support bot: " + bold("@dravonnbot") + ".\n"
         "Tap the button below to open the support chat."
     )
     await message.answer(feedback_text, reply_markup=support_url_kb(), parse_mode=ParseMode.HTML)
