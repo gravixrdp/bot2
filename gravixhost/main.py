@@ -294,7 +294,7 @@ async def on_premium_time_left(message: Message):
 @router.message(F.text == "🆘 Support")
 async def on_support(message: Message):
     await message.answer(
-        bold("🆘 Support") + "\nSupport ke liye niche button par click karein:",
+        bold("🆘 Support") + "\nUse the button below to contact support:",
         reply_markup=support_url_kb(),
         parse_mode=ParseMode.HTML,
     )
