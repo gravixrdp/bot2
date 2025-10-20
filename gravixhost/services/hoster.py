@@ -598,9 +598,9 @@ def _heartbeat():
         time.sleep(30)
 threading.Thread(target=_heartbeat, daemon=True).start()
 
-print('gravix_runner: entry={entry_file} token_len=%d' % (len(token)))
+print('gravix_runner: entry=bot.py token_len=%d' % (len(token)))
 def _try_run():
-    runpy.run_path('{entry_file}', init_globals=init_globals)
+    runpy.run_path('bot.py', init_globals=init_globals)
 
 try:
     _try_run()
