@@ -19,6 +19,7 @@ from .storage import (
     get_user,
     update_user,
     add_bot,
+    update_bot,
     can_host_more,
     mark_started,
     mark_stopped,
@@ -27,7 +28,7 @@ from .storage import (
 )
 from .services.hoster import save_upload, build_and_run, remove_workspace
 from .services.scheduler import Scheduler
-from .admin import router as admin_router
+from .admin import router as admin_router, is_admin
 from .services.ai_assistant import suggest_fix
 
 
@@ -42,6 +43,7 @@ class PendingHost:
 
 class HostStates(StatesGroup):
     waiting_file = State()
+    waiting_name = State()
     waiting_token = State()
 
 
@@ -55,13 +57,17 @@ router = Router(name="user")
 @router.message(Command("start"))
 async def cmd_start(message: Message):
     user = get_user(message.from_user.id)
-    update_user(message.from_user.id, name=message.from_user.full_name)
+    update_user(
+        message.from_user.id,
+        name=message.from_user.full_name,
+        username=message.from_user.username
+    )
     welcome = (
         f"✨ Welcome to {bold(APP_NAME)}\n"
         f"Host your Telegram bot in a secure, isolated environment.\n\n"
         f"Choose an option below:"
     )
-    await message.answer(welcome, reply_markup=main_menu(user.get("is_premium")), parse_mode=ParseMode.HTML)
+    await message.answer(welcome, reply_markup=main_menu(user.get("is_premium"), show_admin=is_admin(message.from_user.id)), parse_mode=ParseMode.HTML)
 
 
 @router.message(Command("help"))
@@ -81,14 +87,14 @@ async def cmd_help(message: Message):
 async def cmd_back_to_menu(message: Message, state: FSMContext):
     await state.clear()
     user = get_user(message.from_user.id)
-    await message.answer(bold("🏠 Main Menu"), reply_markup=main_menu(user.get("is_premium")), parse_mode=ParseMode.HTML)
+    await message.answer(bold("🏠 Main Menu"), reply_markup=main_menu(user.get("is_premium"), show_admin=is_admin(message.from_user.id)), parse_mode=ParseMode.HTML)
 
 # Robust global Back handler that matches most variants, anywhere
 @router.message(F.text.regexp(r"(?i)^\s*(?:/)?\s*(?:⬅️\s*)?back\s*$"))
 async def any_back(message: Message, state: FSMContext):
     await state.clear()
     user = get_user(message.from_user.id)
-    await message.answer(bold("🏠 Main Menu"), reply_markup=main_menu(user.get("is_premium")), parse_mode=ParseMode.HTML)
+    await message.answer(bold("🏠 Main Menu"), reply_markup=main_menu(user.get("is_premium"), show_admin=is_admin(message.from_user.id)), parse_mode=ParseMode.HTML)
 
 
 @router.message(Command("myinfo"))
@@ -102,7 +108,7 @@ async def cmd_myinfo(message: Message):
         f"• Hosted Bots: {len(get_user_bots(message.from_user.id))}\n"
         f"• Plan Expiry: {bold(human_dt(_safe_parse(user.get('premium_expiry'))))}\n"
     )
-    await message.answer(text, reply_markup=main_menu(user.get("is_premium")), parse_mode=ParseMode.HTML)
+    await message.answer(text, reply_markup=main_menu(user.get("is_premium"), show_admin=is_admin(message.from_user.id)), parse_mode=ParseMode.HTML)
 
 
 def _safe_parse(s):
@@ -226,7 +232,7 @@ async def on_how_it_works(message: Message):
         "• We prepare a secure runtime and get your bot online.\n"
         "• Free plan: 1 hour uptime; Premium: unlimited.\n"
     )
-    await message.answer(text, reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")), parse_mode=ParseMode.HTML)
+    await message.answer(text, reply_markup=main_menu(get_user(message.from_user.id).get("is_premium"), show_admin=is_admin(message.from_user.id)), parse_mode=ParseMode.HTML)
 
 
 @router.message(F.text == "💰 Upgrade to Premium")
@@ -288,7 +294,7 @@ async def on_premium_time_left(message: Message):
 @router.message(F.text == "🆘 Support")
 async def on_support(message: Message):
     await message.answer(
-        bold("🆘 Support") + "\nSupport ke liye niche button par click karein:",
+        bold("🆘 Support") + "\nUse the button below to contact support:",
         reply_markup=support_url_kb(),
         parse_mode=ParseMode.HTML,
     )
@@ -515,7 +521,7 @@ async def user_logs_bot(message: Message):
 @router.message(F.text == "🏠 Main Menu")
 async def on_main_menu(message: Message):
     user = get_user(message.from_user.id)
-    await message.answer(bold("🏠 Main Menu"), reply_markup=main_menu(user.get("is_premium")), parse_mode=ParseMode.HTML)
+    await message.answer(bold("🏠 Main Menu"), reply_markup=main_menu(user.get("is_premium"), show_admin=is_admin(message.from_user
 
 
 
@@ -567,13 +573,49 @@ async def handle_upload(message: Message, state: FSMContext):
     content = await message.bot.download_file(file.file_path)
     data_bytes = content.read()
     workspace = save_upload(user_id, bot_rec["id"], filename, data_bytes)
-    from .storage import update_bot
     update_bot(bot_rec["id"], path=workspace)
 
     # Detect entry file
     entry_name = _detect_entry(workspace, filename)
     await state.update_data(pending=PendingHost(workspace=workspace, entry_name=entry_name, bot_record_id=bot_rec["id"], bot_name=bot_rec["name"]).__dict__)
 
+    # Ask for app name first
+    await message.answer(
+        "📝 Please send a name for your app (e.g., MyShopBot).",
+        reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
+        parse_mode=ParseMode.HTML,
+    )
+    await state.set_state(HostStates.waiting_name)
+
+
+@router.message(HostStates.waiting_file)
+async def upload_error(message: Message):
+    await message.answer(
+        f"{bold('⚠️ File type not supported.')}\nPlease upload a .py file or .zip archive.",
+        reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(HostStates.waiting_name, F.text)
+async def handle_app_name(message: Message, state: FSMContext):
+    name = (message.text or "").strip()
+    if not name:
+        await message.answer(
+            "⚠️ Please send a non-empty name for your app.",
+            reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    # Persist name into bot record and pending state
+    data = await state.get_data()
+    pending = PendingHost(**data.get("pending"))
+    pending.bot_name = name
+    update_bot(pending.bot_record_id, name=name)
+    await state.update_data(pending=pending.__dict__)
+
+    # Continue to token
     await message.answer(
         "🔐 Please send your bot token (e.g. " + code("123456:ABC-DEF...") + ")",
         reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
@@ -582,10 +624,10 @@ async def handle_upload(message: Message, state: FSMContext):
     await state.set_state(HostStates.waiting_token)
 
 
-@router.message(HostStates.waiting_file)
-async def upload_error(message: Message):
+@router.message(HostStates.waiting_name)
+async def handle_app_name_nontext(message: Message):
     await message.answer(
-        f"{bold('⚠️ File type not supported.')}\nPlease upload a .py file or .zip archive.",
+        "⚠️ Please send the app name as a text message.",
         reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
         parse_mode=ParseMode.HTML,
     )
@@ -678,9 +720,21 @@ async def handle_token(message: Message, state: FSMContext):
         f"• ID: {code(pending.bot_record_id)}\n"
         f"• Host Time: {'Unlimited (Premium Plan)' if plan == 'premium' else '1 Hour (Free Plan)'}\n"
         "Use /stop to end early.",
-        reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
+        reply_markup=main_menu(get_user(message.from_user.id).get("is_premium"), show_admin=is_admin(message.from_user.id)),
         parse_mode=ParseMode.HTML,
     )
+    # Ask for feedback and screenshots
+    feedback_text = (
+        bold("📸 Share Feedback") + "\n"
+        "Please send:\n"
+        "• A screenshot of your hosted bot running\n"
+        "• A screenshot of your current chat in GRAVIXVPS\n"
+        "• Your feedback about the platform (what did you like, what can be improved)\n\n"
+        "Submit your feedback and screenshots to our support bot: " + bold("@Dravonnbot") + ".\n"
+        "Tap the button below to open the support chat."
+    )
+    await message.answer(feedback_text, reply_markup=support_url_kb(), parse_mode=ParseMode.HTML)
+    await state.cle_coderse_mode=ParseMode.HTML)
     await state.clear()
 
 
@@ -810,8 +864,8 @@ async def cb_manage(cb: CallbackQuery):
 @router.callback_query(F.data == "main_menu")
 async def cb_main_menu(cb: CallbackQuery):
     user = get_user(cb.from_user.id)
-    await cb.message.answer("🏠 Main Menu", reply_markup=main_menu(user.get("is_premium")), parse_mode=ParseMode.HTML)
-    await cb.answer()
+    await cb.message.answer("🏠 Main Menu", reply_markup=main_menu(user.get("is_premium"), show_admin=is_admin(cb.from_user.id)), parse_mode=ParseMode.HTML)
+    await cb.answ_codeernew(</)
 
 
 # User inline actions: stop, restart, remove, logs
@@ -915,6 +969,57 @@ async def on_timeout_notify(bot: Bot, user_id: int, bot_id: str):
         text="⏱️ Hosting time expired!\nYour hosted bot has been stopped automatically.\nUpgrade to premium for unlimited uptime 💎.",
         parse_mode=ParseMode.HTML,
     )
+
+
+# Feedback handlers
+@router.message(F.text.regexp(r"(?i)^feedback:\s*(.+)$"))
+async def on_feedback_text(message: Message):
+    # Acknowledge and direct user to support bot for screenshots/feedback collection
+    try:
+        from .storage import add_message
+        add_message(message.from_user.id, message.text)
+    except Exception:
+        pass
+    await message.answer(
+        "✅ Thank you! Please submit your feedback and screenshots to our support bot.",
+        reply_markup=support_url_kb(),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(F.photo, F.caption.regexp(r"(?i)^feedback:"))
+async def on_feedback_photo(message: Message):
+    # Acknowledge and direct user to support bot for screenshots
+    await      await message.answer("✅ Received your screenshot. Thank you!", parse_mode=ParseMode.HTML)
+        return
+    try:
+        photo = message.photo[-1]  # largest size
+        await message.bot.send_photo(
+            chat_id=ADMIN_TELEGRAM_ID,
+            photo=photo.file_id,
+            caption=f"🖼️ Feedback screenshot from {bold(message.from_user.full_name)} ({code(str(message.from_user.id))}):\n{message.caption}",
+            parse_mode=ParseMode.HTML,
+        )
+        await message.answer("✅ Screenshot forwarded. Thank you!", parse_mode=ParseMode.HTML)
+    except Exception:
+        await message.answer("⚠️ Could not forward the screenshot. Please try again.", parse_mode=ParseMode.HTML)
+
+
+@router.message(F.document, F.caption.regexp(r"(?i)^feedback:"))
+async def on_feedback_document(message: Message):
+    # Acknowledge and direct user to support bot for attachments
+    await message.answer(
+        "✅ Attachment received. Please submit it to our support bot using the button below.",
+        reply_markup=support_url_kb(),
+        parse_mode=ParseMode.HTML,
+   GRAM_ID,
+            document=message.document.file_id,
+            caption=f"📄 Feedback attachment from {bold(message.from_user.full_name)} ({code(str(message.from_user.id))}):\n{message.caption}",
+            parse_mode=ParseMode.HTML,
+        )
+        await message.answer("✅ Attachment forwarded. Thank you!", parse_mode=ParseMode.HTML)
+    except Exception:
+        await message.answer("⚠️ Could not forward the attachment. Please try again.", parse_mode=ParseMode.HTML)
 
 
 def create_app():

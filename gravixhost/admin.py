@@ -29,6 +29,11 @@ class AdminReplyStates(StatesGroup):
     waiting_reply = State()
 
 
+class BroadcastStates(StatesGroup):
+    choosing_audience = State()
+    waiting_text = State()
+
+
 def is_admin(user_id: int) -> bool:
     return bool(ADMIN_TELEGRAM_IDS) and user_id in ADMIN_TELEGRAM_IDS
 
@@ -53,9 +58,11 @@ async def admin_users_msg(message: Message):
     users = db["users"].values()
     text = [bold("👥 Users")]
     for u in users:
-        text.append(
-            f"• {bold(u.get('name') or 'Unknown')} — ID {code(str(u['id']))} — "
+        apps_count = len(get_user_bots(u["id"]))
+        display_name = _format_user_display(u)
+       ') or 'Unknown')} — ID {code(str(u['id']))} — "
             f"Status: {'Premium' if u.get('is_premium') else 'Free'} — "
+            f"Apps: {bold(str(apps_count))} — "
             f"Expiry: {human_dt(_safe_parse(u.get('premium_expiry')))}"
         )
     await message.answer("\n".join(text), reply_markup=admin_menu(), parse_mode=ParseMode.HTML)
@@ -71,6 +78,22 @@ def _safe_parse(s):
         return None
 
 
+def _format_user_display(u: dict) -> str:
+    """
+    Combine username and name for display:
+    - If username exists, include as @username
+    - If name exists, include after username
+    """
+    uname = u.get("username") or ""
+    name = u.get("name") or ""
+    parts = []
+    if uname:
+        parts.append(f"@{uname}")
+    if name:
+        parts.append(name)
+    return " ".join(parts).strip() or "Unknown"
+
+
 @router.message(F.text == "💎 Premium")
 async def admin_premium_msg(message: Message):
     if not is_admin(message.from_user.id):
@@ -80,6 +103,26 @@ async def admin_premium_msg(message: Message):
         reply_markup=admin_menu(),
         parse_mode=ParseMode.HTML,
     )
+
+
+@router.message(F.text == "📢 Broadcast")
+async def admin_broadcast_msg(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Free Users", callback_data="admin_broadcast:free"),
+                InlineKeyboardButton(text="Premium Users", callback_data="admin_broadcast:premium"),
+            ],
+            [
+                InlineKeyboardButton(text="Both", callback_data="admin_broadcast:both"),
+            ],
+        ]
+    )
+    await state.set_state(BroadcastStates.choosing_audience)
+    await message.answer(bold("📢 Broadcast") + "\nChoose audience:", reply_markup=kb, parse_mode=ParseMode.HTML)
 
 @router.message(F.text == "💬 Inbox")
 async def admin_inbox(message: Message):
@@ -94,7 +137,7 @@ async def admin_inbox(message: Message):
     lines = [bold("💬 Inbox (last 50)") + "\n" + code("Use: reply <user_id> <your message>")]
     for m in msgs:
         from_user = get_user(int(m["user_id"]))
-        name = from_user.get("name") or "Unknown"
+        display_name = _format_user) or "Unknown"
         prefix = "Admin →" if m.get("from_admin") else "User →"
         lines.append(f"• {m['time']} — {bold(name)} ({code(str(m['user_id']))}) — {prefix}")
         lines.append(f"  {escape(m['text'])}")
@@ -135,15 +178,39 @@ async def admin_reply(message: Message):
 async def admin_apps_msg(message: Message):
     if not is_admin(message.from_user.id):
         return
-    text = [bold("📦 Apps")]
+    text = [bold("📦 Apps — Hosted by Users")]
     db = _read_db()
     bots = list(db["bots"].values())
+
+    # Group bots by owner
+    owners = {}
     for b in bots:
-        text.append(
-            f"• {bold(b.get('name') or 'Unknown')} — ID {code(b['id'])} — Owner {code(str(b['owner_id']))} — "
-            f"Status: {bold(b['status'])}"
-        )
+        owners.setdefault(b["owner_id"], []).append(b)
+
+    if not owners:
+        await message.answer(bold("No bots yet."), reply_markup=admin_menu_apps(), parse_mode=ParseMode.HTML)
+        return
+
+    for owner_id, owner_bots in owners.items():
+        u = get_user(int(owner_id))
+        owner_display = _format_user_display(u)
+        text.append(f"\n{bold(owner_display)} ({code(str(owner_id))})")
+        for b in owner_bots:
+            text.append(
+                f"• {bold(b.get('name') or 'Unknown')} — ID {code(b['id'])} — Status: {bold(b['status'])}"
+            )
+
     await message.answer("\n".join(text), reply_markup=admin_menu_apps(), parse_mode=ParseMode.HTML)
+
+    # Quick action buttons for easy control
+    from .keyboards import bots_action_list
+    if bots:
+        await message.answer(bold("🛑 Stop a Bot") + "\nTap to stop:", reply_markup=bots_action_list(bots, "Stop", "admin_stop"), parse_mode=ParseMode.HTML)
+        await message.answer(bold("♻️ Restart a Bot") + "\nTap to restart:", reply_markup=bots_action_list(bots, "Restart", "admin_restart"), parse_mode=ParseMode.HTML)
+        await message.answer(bold("🗑️ Remove a Bot") + "\nTap to remove:", reply_markup=bots_action_list(bots, "Remove", "admin_remove"), parse_mode=ParseMode.HTML)
+        await message.answer(bold("📜 Bot Logs") + "\nTap to view:", reply_markup=bots_action_list(bots, "Logs", "admin_logs"), parse_mode=ParseMode.HTML)
+    else:
+        await message.answer(bold("No bots yet."), reply_markup=admin_menu_apps(), parse_mode=ParseMode.HTML)
 
     # Send quick action buttons for one-tap control
     from .keyboards import bots_action_list
@@ -268,8 +335,54 @@ async def admin_settings_msg(message: Message):
     await message.answer(text, reply_markup=admin_menu(), parse_mode=ParseMode.HTML)
 
 
+@router.message(BroadcastStates.waiting_text, F.text)
+async def admin_broadcast_send(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    data = await state.get_data()
+    audience = (data.get("broadcast_audience") or "").lower()
+    if audience not in {"free", "premium", "both"}:
+        await message.answer("Invalid broadcast audience. Start again: tap 📢 Broadcast.", reply_markup=admin_menu(), parse_mode=ParseMode.HTML)
+        await state.clear()
+        return
+
+    db = _read_db()
+    users = list(db.get("users", {}).values())
+    targets = []
+    for u in users:
+        is_premium = bool(u.get("is_premium"))
+        if audience == "both":
+            targets.append(int(u["id"]))
+        elif audience == "premium" and is_premium:
+            targets.append(int(u["id"]))
+        elif audience == "free" and not is_premium:
+            targets.append(int(u["id"]))
+
+    sent = 0
+    failed = 0
+    for uid in targets:
+        try:
+            await message.bot.send_message(chat_id=uid, text=message.text, parse_mode=ParseMode.HTML)
+            sent += 1
+        except Exception:
+            failed += 1
+
+    from .storage import log_event_admin
+    log_event_admin(f"Broadcast by {message.from_user.id} audience={audience} sent={sent} failed={failed}")
+
+    await message.answer(f"✅ Broadcast completed.\nAudience: {bold(audience.capitalize())}\nDelivered: {bold(str(sent))}\nFailed: {bold(str(failed))}", reply_markup=admin_menu(), parse_mode=ParseMode.HTML)
+    await state.clear()
+
+
 @router.message(F.text == "🏠 Main Menu")
 async def admin_main_menu_msg(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    await admin_entry(message)
+
+
+@router.message(F.text == "🛡️ Admin Panel")
+async def admin_panel_button(message: Message):
     if not is_admin(message.from_user.id):
         return
     await admin_entry(message)
@@ -469,10 +582,11 @@ async def admin_users(cb: CallbackQuery):
     users = db["users"].values()
     text = [bold("👥 Users")]
     for u in users:
+        display_name = _format_user_display(u)
+        apps_count = len(get_user_bots(u["id"]))
         text.append(
-            f"• {bold(u.get('name') or 'Unknown')} — ID {code(str(u['id']))} — "
-            f"Status: {'Premium' if u.get('is_premium') else 'Free'} — "
-            f"Expiry: {human_dt(_safe_parse(u.get('premium_expiry')))}"
+            f"• {bold(display_name)} — ID {code(str(u['id']))} — "
+            f"Status: {'Premium' if uget('premium_expiry')))}"
         )
     await cb.message.answer("\n".join(text), reply_markup=admin_fixed_bar(), parse_mode=ParseMode.HTML)
     await cb.answer()
@@ -490,18 +604,69 @@ async def admin_premium(cb: CallbackQuery):
     await cb.answer()
 
 
+@router.callback_query(F.data == "admin_broadcast")
+async def admin_broadcast_cb(cb: CallbackQuery, state: FSMContext):
+    if not is_admin(cb.from_user.id):
+        return
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Free Users", callback_data="admin_broadcast:free"),
+                InlineKeyboardButton(text="Premium Users", callback_data="admin_broadcast:premium"),
+            ],
+            [
+                InlineKeyboardButton(text="Both", callback_data="admin_broadcast:both"),
+            ],
+        ]
+    )
+    await state.set_state(BroadcastStates.choosing_audience)
+    await cb.message.answer(bold("📢 Broadcast") + "\nChoose audience:", reply_markup=kb, parse_mode=ParseMode.HTML)
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("admin_broadcast:"))
+async def admin_broadcast_choose(cb: CallbackQuery, state: FSMContext):
+    if not is_admin(cb.from_user.id):
+        return
+    audience = cb.data.split(":", 1)[1]
+    if audience not in {"free", "premium", "both"}:
+        await cb.message.answer("Invalid audience selection.", reply_markup=admin_fixed_bar(), parse_mode=ParseMode.HTML)
+        await cb.answer()
+        return
+    await state.update_data(broadcast_audience=audience)
+    await state.set_state(BroadcastStates.waiting_text)
+    await cb.message.answer(bold("📢 Broadcast") + f"\nAudience: {bold(audience.capitalize())}\nSend the message text to broadcast.", parse_mode=ParseMode.HTML)
+    await cb.answer()
+
+
 @router.callback_query(F.data == "admin_apps")
 async def admin_apps(cb: CallbackQuery):
     if not is_admin(cb.from_user.id):
         return
-    text = [bold("📦 Apps")]
+    text = [bold("📦 Apps — Hosted by Users")]
     db = _read_db()
     bots = list(db["bots"].values())
+
+    # Group bots by owner
+    owners = {}
     for b in bots:
-        text.append(
-            f"• {bold(b.get('name') or 'Unknown')} — ID {code(b['id'])} — Owner {code(str(b['owner_id']))} — "
-            f"Status: {bold(b['status'])}"
-        )
+        owners.setdefault(b["owner_id"], []).append(b)
+
+    if not owners:
+        await cb.message.answer(bold("No bots yet."), reply_markup=admin_fixed_bar(), parse_mode=ParseMode.HTML)
+        await cb.answer()
+        return
+
+    for owner_id, owner_bots in owners.items():
+        u = get_user(int(owner_id))
+        owner_display = _format_user_display(u)
+        text.append(f"\n{bold(owner_display)} ({code(str(owner_id))})")
+        for b in owner_bots:
+            text.append(
+                f"• {bold(b.get('name') or 'Unknown')} — ID {code(b['id'])} — Status: {bold(b['status'])}"
+            )
+
     await cb.message.answer("\n".join(text), reply_markup=admin_fixed_bar(), parse_mode=ParseMode.HTML)
 
     # Inline quick action lists
