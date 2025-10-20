@@ -148,14 +148,20 @@ def _detect_entry(workspace: str, uploaded_filename: str) -> str:
 
 @router.message(Command("upgrade"))
 async def cmd_upgrade(message: Message):
+    """
+    Show upgrade info and provide a direct contact button to @Dravonnbot (admin)
+    for all users, including free users.
+    """
     text = (
-        f"{bold('💎 Upgrade to Premium')}\n"
-        "• Unlimited uptime\n"
-        "• Host multiple bots\n"
-        "• Priority support\n\n"
-        "Contact admin via the button (for premium users) or reply here with your request."
+        f"{bold('💎 Upgrade to Premium')}\\n"
+        "• Unlimited uptime\\n"
+        "• Host multiple bots\\n"
+        "• Priority support\\n\\n"
+        "To upgrade, contact our admin directly at " + bold("@Dravonnbot") + ".\\n"
+        "Use the button below to open the chat."
     )
-    await message.answer(text, reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")), parse_mode=ParseMode.HTML)
+    # Provide direct link to @Dravonnbot
+    await message.answer(text, reply_markup=support_url_kb(), parse_mode=ParseMode.HTML)
 
 
 @router.message(Command("host"))
