@@ -78,6 +78,7 @@ def admin_menu() -> ReplyKeyboardMarkup:
         KeyboardButton(text="💬 Inbox"),
         KeyboardButton(text="🧾 Logs"),
         KeyboardButton(text="🗑️ Clear Admin Logs"),
+        KeyboardButton(text="📢 Broadcast"),
         KeyboardButton(text="⚙️ Settings"),
         KeyboardButton(text="🏠 Main Menu"),
     ]
@@ -122,6 +123,9 @@ def admin_fixed_bar() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text="🧾 Logs", callback_data="admin_logs"),
+        ],
+        [
+            InlineKeyboardButton(text="📢 Broadcast", callback_data="admin_broadcast"),
         ],
         [
             InlineKeyboardButton(text="⚙️ Settings", callback_data="admin_settings"),

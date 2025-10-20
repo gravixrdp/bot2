@@ -29,6 +29,11 @@ class AdminReplyStates(StatesGroup):
     waiting_reply = State()
 
 
+class BroadcastStates(StatesGroup):
+    choosing_audience = State()
+    waiting_text = State()
+
+
 def is_admin(user_id: int) -> bool:
     return bool(ADMIN_TELEGRAM_IDS) and user_id in ADMIN_TELEGRAM_IDS
 
@@ -98,6 +103,26 @@ async def admin_premium_msg(message: Message):
         reply_markup=admin_menu(),
         parse_mode=ParseMode.HTML,
     )
+
+
+@router.message(F.text == "📢 Broadcast")
+async def admin_broadcast_msg(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Free Users", callback_data="admin_broadcast:free"),
+                InlineKeyboardButton(text="Premium Users", callback_data="admin_broadcast:premium"),
+            ],
+            [
+                InlineKeyboardButton(text="Both", callback_data="admin_broadcast:both"),
+            ],
+        ]
+    )
+    await state.set_state(BroadcastStates.choosing_audience)
+    await message.answer(bold("📢 Broadcast") + "\nChoose audience:", reply_markup=kb, parse_mode=ParseMode.HTML)
 
 @router.message(F.text == "💬 Inbox")
 async def admin_inbox(message: Message):
@@ -308,6 +333,45 @@ async def admin_settings_msg(message: Message):
         + code("setrun <runner|direct>") + " — e.g., setrun direct\n"
     )
     await message.answer(text, reply_markup=admin_menu(), parse_mode=ParseMode.HTML)
+
+
+@router.message(BroadcastStates.waiting_text, F.text)
+async def admin_broadcast_send(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    data = await state.get_data()
+    audience = (data.get("broadcast_audience") or "").lower()
+    if audience not in {"free", "premium", "both"}:
+        await message.answer("Invalid broadcast audience. Start again: tap 📢 Broadcast.", reply_markup=admin_menu(), parse_mode=ParseMode.HTML)
+        await state.clear()
+        return
+
+    db = _read_db()
+    users = list(db.get("users", {}).values())
+    targets = []
+    for u in users:
+        is_premium = bool(u.get("is_premium"))
+        if audience == "both":
+            targets.append(int(u["id"]))
+        elif audience == "premium" and is_premium:
+            targets.append(int(u["id"]))
+        elif audience == "free" and not is_premium:
+            targets.append(int(u["id"]))
+
+    sent = 0
+    failed = 0
+    for uid in targets:
+        try:
+            await message.bot.send_message(chat_id=uid, text=message.text, parse_mode=ParseMode.HTML)
+            sent += 1
+        except Exception:
+            failed += 1
+
+    from .storage import log_event_admin
+    log_event_admin(f"Broadcast by {message.from_user.id} audience={audience} sent={sent} failed={failed}")
+
+    await message.answer(f"✅ Broadcast completed.\nAudience: {bold(audience.capitalize())}\nDelivered: {bold(str(sent))}\nFailed: {bold(str(failed))}", reply_markup=admin_menu(), parse_mode=ParseMode.HTML)
+    await state.clear()
 
 
 @router.message(F.text == "🏠 Main Menu")
@@ -537,6 +601,42 @@ async def admin_premium(cb: CallbackQuery):
         reply_markup=admin_fixed_bar(),
         parse_mode=ParseMode.HTML,
     )
+    await cb.answer()
+
+
+@router.callback_query(F.data == "admin_broadcast")
+async def admin_broadcast_cb(cb: CallbackQuery, state: FSMContext):
+    if not is_admin(cb.from_user.id):
+        return
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Free Users", callback_data="admin_broadcast:free"),
+                InlineKeyboardButton(text="Premium Users", callback_data="admin_broadcast:premium"),
+            ],
+            [
+                InlineKeyboardButton(text="Both", callback_data="admin_broadcast:both"),
+            ],
+        ]
+    )
+    await state.set_state(BroadcastStates.choosing_audience)
+    await cb.message.answer(bold("📢 Broadcast") + "\nChoose audience:", reply_markup=kb, parse_mode=ParseMode.HTML)
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("admin_broadcast:"))
+async def admin_broadcast_choose(cb: CallbackQuery, state: FSMContext):
+    if not is_admin(cb.from_user.id):
+        return
+    audience = cb.data.split(":", 1)[1]
+    if audience not in {"free", "premium", "both"}:
+        await cb.message.answer("Invalid audience selection.", reply_markup=admin_fixed_bar(), parse_mode=ParseMode.HTML)
+        await cb.answer()
+        return
+    await state.update_data(broadcast_audience=audience)
+    await state.set_state(BroadcastStates.waiting_text)
+    await cb.message.answer(bold("📢 Broadcast") + f"\nAudience: {bold(audience.capitalize())}\nSend the message text to broadcast.", parse_mode=ParseMode.HTML)
     await cb.answer()
 
 
