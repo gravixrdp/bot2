@@ -531,9 +531,11 @@ def _run_locally(workspace: str, entry: Optional[str], token: str) -> Tuple[bool
 
 def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: Optional[str] = None) -> Tuple[bool, Optional[str], Optional[str]]:
     """
-    Replace previous multi-file workspace build with single-file, temp-dir based flow
-    similar to the provided method: detect framework, guess minimal requirements,
-    write bot.py and Dockerfile into a temp dir, build, and run.
+    Build a minimal container around the uploaded bot and run it.
+    Changes:
+    - Use a small runner (gravix_runner.py) that injects token into common variables/env
+      and emits a heartbeat log so we can see liveness even if user code is silent.
+    - Guess minimal requirements based on framework and install them.
     """
     if not _docker_available():
         log_event("Docker not available. Aborting deployment.")
@@ -544,12 +546,10 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
     entry_file = entry
     try:
         if not entry_file:
-            # Prefer bot.py at root if present
             candidate = os.path.join(workspace, "bot.py")
             if os.path.exists(candidate):
                 entry_file = "bot.py"
             else:
-                # Find any .py file (fallback)
                 for f in os.listdir(workspace):
                     if f.endswith(".py"):
                         entry_file = f
@@ -576,6 +576,70 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
         with open(os.path.join(temp_dir, "requirements.txt"), "w", encoding="utf-8") as f:
             f.write("\n".join(reqs) if reqs else "")
 
+        # Write runner with heartbeat and token injection
+        runner_code = f"""import os, runpy, sys, subprocess, threading, time, re
+token = os.getenv('TELEGRAM_TOKEN') or os.getenv('BOT_TOKEN') or ''
+# Expose in env for libraries that read from environment
+os.environ['BOT_TOKEN'] = token
+os.environ['TELEGRAM_TOKEN'] = token
+os.environ['TOKEN'] = token
+os.environ['TELEGRAM_BOT_TOKEN'] = token
+# Prepare globals so user code can reference BOT_TOKEN or TOKEN directly
+init_globals = {{'BOT_TOKEN': token, 'TOKEN': token, 'TELEGRAM_TOKEN': token}}
+# Ensure current working directory is the app root
+os.chdir(os.path.dirname(__file__))
+
+def _heartbeat():
+    while True:
+        try:
+            print('gravix_runner: heartbeat alive')
+        except Exception:
+            pass
+        time.sleep(30)
+threading.Thread(target=_heartbeat, daemon=True).start()
+
+print('gravix_runner: entry={entry_file} token_len=%d' % (len(token)))
+def _try_run():
+    runpy.run_path('{entry_file}', init_globals=init_globals)
+
+try:
+    _try_run()
+except ModuleNotFoundError as e:
+    missing = getattr(e, 'name', None)
+    if not missing and 'No module named' in str(e):
+        m = re.search(r"No module named ['\\\"]([^'\\\"]+)['\\\"]", str(e))
+        if m:
+            missing = m.group(1)
+    _MAP = {{
+        'telebot': 'pyTelegramBotAPI',
+        'telegram': 'python-telegram-bot',
+        'PIL': 'pillow',
+        'cv2': 'opencv-python',
+        'bs4': 'beautifulsoup4',
+        'yaml': 'pyyaml',
+        'Crypto': 'pycryptodome',
+        'OpenSSL': 'pyOpenSSL',
+    }}
+    pkg = _MAP.get(missing)
+    if pkg:
+        print('gravix_runner: auto-installing %s for missing module %s' % (pkg, missing))
+        try:
+            subprocess.check_call([sys.executable, '-m', 'pip', 'install', pkg])
+            _try_run()
+        except Exception:
+            import traceback; traceback.print_exc(); sys.exit(1)
+    else:
+        raise
+except SystemExit:
+    raise
+except Exception:
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
+"""
+        with open(os.path.join(temp_dir, "gravix_runner.py"), "w", encoding="utf-8") as f:
+            f.write(runner_code)
+
         # Base image selection based on framework
         base_img = AIOGRAM_V2_IMAGE if framework == "aiogram_v2" else DEFAULT_BASE_IMAGE
         dockerfile = (
@@ -584,11 +648,12 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
             "COPY requirements.txt .\n"
             "RUN pip install --no-cache-dir -r requirements.txt\n"
             "COPY bot.py .\n"
+            "COPY gravix_runner.py .\n"
             f"ENV TOKEN={token}\n"
             f"ENV BOT_TOKEN={token}\n"
             f"ENV TELEGRAM_TOKEN={token}\n"
             f"ENV {token_var}={token}\n"
-            'CMD ["python","-u","bot.py"]\n'
+            'CMD ["python","/app/gravix_runner.py"]\n'
         )
         with open(os.path.join(temp_dir, "Dockerfile"), "w", encoding="utf-8") as f:
             f.write(dockerfile)
@@ -612,7 +677,7 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
                 log_event(f"Could not verify/create network '{network}', proceeding with defaults.")
                 network = None
 
-        # Run container with simple resource limits (same-to-same style)
+        # Run container with simple resource limits
         container = client.containers.run(
             image_tag,
             name=container_name,
