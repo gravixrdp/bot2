@@ -310,13 +310,6 @@ async def on_manage_bots(message: Message):
     else:
         for b in bots:
             lines.append(f"• {bold(b.get('name') or 'MyBot')} — ID {code(b['id'])} — Status: {bold(b['status'])}")
-    lines.append(
-        "\nUse the buttons below.\nCommands: "
-        + code("stop <bot_id>") + " / "
-        + code("restart <bot_id>") + " / "
-        + code("remove <bot_id>") + " / "
-        + code("logs <bot_id>")
-    )
     await message.answer("\n".join(lines), reply_markup=user_manage_menu(), parse_mode=ParseMode.HTML)
 
 
