@@ -55,7 +55,11 @@ router = Router(name="user")
 @router.message(Command("start"))
 async def cmd_start(message: Message):
     user = get_user(message.from_user.id)
-    update_user(message.from_user.id, name=message.from_user.full_name)
+    update_user(
+        message.from_user.id,
+        name=message.from_user.full_name,
+        username=message.from_user.username
+    )
     welcome = (
         f"✨ Welcome to {bold(APP_NAME)}\n"
         f"Host your Telegram bot in a secure, isolated environment.\n\n"

@@ -54,8 +54,8 @@ async def admin_users_msg(message: Message):
     text = [bold("👥 Users")]
     for u in users:
         apps_count = len(get_user_bots(u["id"]))
-        text.append(
-            f"• {bold(u.get('name') or 'Unknown')} — ID {code(str(u['id']))} — "
+        display_name = _format_user_display(u)
+       ') or 'Unknown')} — ID {code(str(u['id']))} — "
             f"Status: {'Premium' if u.get('is_premium') else 'Free'} — "
             f"Apps: {bold(str(apps_count))} — "
             f"Expiry: {human_dt(_safe_parse(u.get('premium_expiry')))}"
@@ -71,6 +71,22 @@ def _safe_parse(s):
         return datetime.fromisoformat(s)
     except Exception:
         return None
+
+
+def _format_user_display(u: dict) -> str:
+    """
+    Combine username and name for display:
+    - If username exists, include as @username
+    - If name exists, include after username
+    """
+    uname = u.get("username") or ""
+    name = u.get("name") or ""
+    parts = []
+    if uname:
+        parts.append(f"@{uname}")
+    if name:
+        parts.append(name)
+    return " ".join(parts).strip() or "Unknown"
 
 
 @router.message(F.text == "💎 Premium")
@@ -96,7 +112,7 @@ async def admin_inbox(message: Message):
     lines = [bold("💬 Inbox (last 50)") + "\n" + code("Use: reply <user_id> <your message>")]
     for m in msgs:
         from_user = get_user(int(m["user_id"]))
-        name = from_user.get("name") or "Unknown"
+        display_name = _format_user) or "Unknown"
         prefix = "Admin →" if m.get("from_admin") else "User →"
         lines.append(f"• {m['time']} — {bold(name)} ({code(str(m['user_id']))}) — {prefix}")
         lines.append(f"  {escape(m['text'])}")
@@ -471,10 +487,11 @@ async def admin_users(cb: CallbackQuery):
     users = db["users"].values()
     text = [bold("👥 Users")]
     for u in users:
+        display_name = _format_user_display(u)
+        apps_count = len(get_user_bots(u["id"]))
         text.append(
-            f"• {bold(u.get('name') or 'Unknown')} — ID {code(str(u['id']))} — "
-            f"Status: {'Premium' if u.get('is_premium') else 'Free'} — "
-            f"Expiry: {human_dt(_safe_parse(u.get('premium_expiry')))}"
+            f"• {bold(display_name)} — ID {code(str(u['id']))} — "
+            f"Status: {'Premium' if uget('premium_expiry')))}"
         )
     await cb.message.answer("\n".join(text), reply_markup=admin_fixed_bar(), parse_mode=ParseMode.HTML)
     await cb.answer()
