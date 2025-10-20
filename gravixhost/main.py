@@ -19,6 +19,7 @@ from .storage import (
     get_user,
     update_user,
     add_bot,
+    update_bot,
     can_host_more,
     mark_started,
     mark_stopped,
@@ -42,6 +43,7 @@ class PendingHost:
 
 class HostStates(StatesGroup):
     waiting_file = State()
+    waiting_name = State()
     waiting_token = State()
 
 
@@ -571,13 +573,49 @@ async def handle_upload(message: Message, state: FSMContext):
     content = await message.bot.download_file(file.file_path)
     data_bytes = content.read()
     workspace = save_upload(user_id, bot_rec["id"], filename, data_bytes)
-    from .storage import update_bot
     update_bot(bot_rec["id"], path=workspace)
 
     # Detect entry file
     entry_name = _detect_entry(workspace, filename)
     await state.update_data(pending=PendingHost(workspace=workspace, entry_name=entry_name, bot_record_id=bot_rec["id"], bot_name=bot_rec["name"]).__dict__)
 
+    # Ask for app name first
+    await message.answer(
+        "📝 Please send a name for your app (e.g., MyShopBot).",
+        reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
+        parse_mode=ParseMode.HTML,
+    )
+    await state.set_state(HostStates.waiting_name)
+
+
+@router.message(HostStates.waiting_file)
+async def upload_error(message: Message):
+    await message.answer(
+        f"{bold('⚠️ File type not supported.')}\nPlease upload a .py file or .zip archive.",
+        reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(HostStates.waiting_name, F.text)
+async def handle_app_name(message: Message, state: FSMContext):
+    name = (message.text or "").strip()
+    if not name:
+        await message.answer(
+            "⚠️ Please send a non-empty name for your app.",
+            reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    # Persist name into bot record and pending state
+    data = await state.get_data()
+    pending = PendingHost(**data.get("pending"))
+    pending.bot_name = name
+    update_bot(pending.bot_record_id, name=name)
+    await state.update_data(pending=pending.__dict__)
+
+    # Continue to token
     await message.answer(
         "🔐 Please send your bot token (e.g. " + code("123456:ABC-DEF...") + ")",
         reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
@@ -586,10 +624,10 @@ async def handle_upload(message: Message, state: FSMContext):
     await state.set_state(HostStates.waiting_token)
 
 
-@router.message(HostStates.waiting_file)
-async def upload_error(message: Message):
+@router.message(HostStates.waiting_name)
+async def handle_app_name_nontext(message: Message):
     await message.answer(
-        f"{bold('⚠️ File type not supported.')}\nPlease upload a .py file or .zip archive.",
+        "⚠️ Please send the app name as a text message.",
         reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
         parse_mode=ParseMode.HTML,
     )
