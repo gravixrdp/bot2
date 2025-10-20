@@ -160,16 +160,12 @@ async def cmd_upgrade(message: Message):
     # First send upgrade details with a direct contact button
     await message.answer(text, reply_markup=support_url_kb(), parse_mode=ParseMode.HTML)
     # Then show the main menu so users can continue using the bot
-    await message.answer(bold("🏠 Main Menu"), reply_markup=main_menu(user.get("is_premium"), show_admin=is_admin(message.from_user.id)), parse_mode=ParseMode.HTML)grade"))
-async def cmd_upgrade(message: Message):
-    user = get_user(message.from_user.id)
-    text = (
-        f"{bold('💎 Upgrade to Premium')}\n"
-        "• Unlimited uptime\n"
-        "• Host multiple bots\n"
-        "• Priority support\n\n"
-        "Free users: admin se upgrade ke liye DM karein " + bold("@dravonnbot") + ".\n"
-        "Premium users: aap 'r(message.from_user.id).get("is_premium")), parse_mode=ParseMode.HTML)
+    await message.answer(
+        bold("🏠 Main Menu"),
+        reply_markup=main_menu(user.get("is_premium"), show_admin=is_admin(message.from_user.id)),
+        parse_mode=ParseMode.HTML,
+    )
+
 
 
 @router.message(Command("host"))
