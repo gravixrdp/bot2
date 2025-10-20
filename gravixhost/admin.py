@@ -60,7 +60,8 @@ async def admin_users_msg(message: Message):
     for u in users:
         apps_count = len(get_user_bots(u["id"]))
         display_name = _format_user_display(u)
-       ') or 'Unknown')} — ID {code(str(u['id']))} — "
+        text.append(
+            f"• {bold(display_name)} — ID {code(str(u['id']))} — "
             f"Status: {'Premium' if u.get('is_premium') else 'Free'} — "
             f"Apps: {bold(str(apps_count))} — "
             f"Expiry: {human_dt(_safe_parse(u.get('premium_expiry')))}"
@@ -136,10 +137,10 @@ async def admin_inbox(message: Message):
     # Build readable list
     lines = [bold("💬 Inbox (last 50)") + "\n" + code("Use: reply <user_id> <your message>")]
     for m in msgs:
-        from_user = get_user(int(m["user_id"]))
-        display_name = _format_user) or "Unknown"
+        u = get_user(int(m["user_id"]))
+        display_name = _format_user_display(u)
         prefix = "Admin →" if m.get("from_admin") else "User →"
-        lines.append(f"• {m['time']} — {bold(name)} ({code(str(m['user_id']))}) — {prefix}")
+        lines.append(f"• {m['time']} — {bold(display_name)} ({code(str(m['user_id']))}) — {prefix}")
         lines.append(f"  {escape(m['text'])}")
     await message.answer("\n".join(lines), reply_markup=admin_menu(), parse_mode=ParseMode.HTML)
 
@@ -586,7 +587,9 @@ async def admin_users(cb: CallbackQuery):
         apps_count = len(get_user_bots(u["id"]))
         text.append(
             f"• {bold(display_name)} — ID {code(str(u['id']))} — "
-            f"Status: {'Premium' if uget('premium_expiry')))}"
+            f"Status: {'Premium' if u.get('is_premium') else 'Free'} — "
+            f"Apps: {bold(str(apps_count))} — "
+            f"Expiry: {human_dt(_safe_parse(u.get('premium_expiry')))}"
         )
     await cb.message.answer("\n".join(text), reply_markup=admin_fixed_bar(), parse_mode=ParseMode.HTML)
     await cb.answer()
