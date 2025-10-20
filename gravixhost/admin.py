@@ -53,9 +53,11 @@ async def admin_users_msg(message: Message):
     users = db["users"].values()
     text = [bold("👥 Users")]
     for u in users:
+        apps_count = len(get_user_bots(u["id"]))
         text.append(
             f"• {bold(u.get('name') or 'Unknown')} — ID {code(str(u['id']))} — "
             f"Status: {'Premium' if u.get('is_premium') else 'Free'} — "
+            f"Apps: {bold(str(apps_count))} — "
             f"Expiry: {human_dt(_safe_parse(u.get('premium_expiry')))}"
         )
     await message.answer("\n".join(text), reply_markup=admin_menu(), parse_mode=ParseMode.HTML)
