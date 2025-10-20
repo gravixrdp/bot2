@@ -153,15 +153,14 @@ async def cmd_upgrade(message: Message):
     for all users, including free users.
     """
     text = (
-        f"{bold('💎 Upgrade to Premium')}\\n"
-        "• Unlimited uptime\\n"
-        "• Host multiple bots\\n"
-        "• Priority support\\n\\n"
-        "To upgrade, contact our admin directly at " + bold("@Dravonnbot") + ".\\n"
+        bold("💎 Upgrade to Premium") + "\n"
+        "• Unlimited uptime\n"
+        "• Host multiple bots\n"
+        "• Priority support\n\n"
+        "To upgrade, contact our admin directly at " + bold("@Dravonnbot") + ".\n"
         "Use the button below to open the chat."
     )
-    # Provide direct link to @Dravonnbot
-    await message.answer(text, reply_markup=support_url_kb(), parse_mode=ParseMode.HTML)
+    await message.answer(text, reply_markup=support_url_kb(), parse_mode=ParseMode.H_codep=support_url_kb(), parse_mode=ParseMode.HTML)
 
 
 @router.message(Command("host"))
