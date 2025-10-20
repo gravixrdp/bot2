@@ -48,8 +48,8 @@ def main_menu(is_premium: bool, show_admin: bool = False) -> ReplyKeyboardMarkup
             KeyboardButton(text="🏠 Main Menu"),
         ]
     if show_admin:
-        # Place Admin Panel button prominently
-        buttons.insert(0, KeyboardButton(text="🛡️ Admin Panel"))
+        # Place Admin Panel button at the end (last row)
+        buttons.append(KeyboardButton(text="🛡️ Admin Panel"))
     rows = _chunk_buttons(buttons, per_row=2)
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=False, is_persistent=True)
 
@@ -78,8 +78,9 @@ def admin_menu() -> ReplyKeyboardMarkup:
         KeyboardButton(text="💬 Inbox"),
         KeyboardButton(text="🧾 Logs"),
         KeyboardButton(text="🗑️ Clear Admin Logs"),
-        KeyboardButton(text="📢 Broadcast"),
         KeyboardButton(text="⚙️ Settings"),
+        # Place Broadcast as the last actionable button just before Main Menu
+        KeyboardButton(text="📢 Broadcast"),
         KeyboardButton(text="🏠 Main Menu"),
     ]
     rows = _chunk_buttons(buttons, per_row=2)
