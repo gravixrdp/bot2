@@ -24,7 +24,7 @@ def _chunk_buttons(buttons, per_row: int = 2):
 
 
 # Reply keyboard that stays above the input field and sends button text as a message
-def main_menu(is_premium: bool) -> ReplyKeyboardMarkup:
+def main_menu(is_premium: bool, show_admin: bool = False) -> ReplyKeyboardMarkup:
     if is_premium:
         buttons = [
             KeyboardButton(text="📦 Host My Bot"),
@@ -47,6 +47,9 @@ def main_menu(is_premium: bool) -> ReplyKeyboardMarkup:
             KeyboardButton(text="⏳ Premium Time Left"),
             KeyboardButton(text="🏠 Main Menu"),
         ]
+    if show_admin:
+        # Place Admin Panel button prominently
+        buttons.insert(0, KeyboardButton(text="🛡️ Admin Panel"))
     rows = _chunk_buttons(buttons, per_row=2)
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, one_time_keyboard=False, is_persistent=True)
 

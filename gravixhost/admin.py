@@ -317,6 +317,13 @@ async def admin_main_menu_msg(message: Message):
     await admin_entry(message)
 
 
+@router.message(F.text == "🛡️ Admin Panel")
+async def admin_panel_button(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    await admin_entry(message)
+
+
 # Quick-action helper buttons (send usage if no id provided)
 @router.message(F.text.in_(["stopbot", "restartbot", "removebot", "logsbot"]))
 async def admin_action_help(message: Message):

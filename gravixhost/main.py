@@ -28,7 +28,7 @@ from .storage import (
 )
 from .services.hoster import save_upload, build_and_run, remove_workspace
 from .services.scheduler import Scheduler
-from .admin import router as admin_router
+from .admin import router as admin_router, is_admin
 from .services.ai_assistant import suggest_fix
 
 
@@ -67,7 +67,7 @@ async def cmd_start(message: Message):
         f"Host your Telegram bot in a secure, isolated environment.\n\n"
         f"Choose an option below:"
     )
-    await message.answer(welcome, reply_markup=main_menu(user.get("is_premium")), parse_mode=ParseMode.HTML)
+    await message.answer(welcome, reply_markup=main_menu(user.get("is_premium"), show_admin=is_admin(message.from_user.id)), parse_mode=ParseMode.HTML)
 
 
 @router.message(Command("help"))
@@ -87,14 +87,14 @@ async def cmd_help(message: Message):
 async def cmd_back_to_menu(message: Message, state: FSMContext):
     await state.clear()
     user = get_user(message.from_user.id)
-    await message.answer(bold("🏠 Main Menu"), reply_markup=main_menu(user.get("is_premium")), parse_mode=ParseMode.HTML)
+    await message.answer(bold("🏠 Main Menu"), reply_markup=main_menu(user.get("is_premium"), show_admin=is_admin(message.from_user.id)), parse_mode=ParseMode.HTML)
 
 # Robust global Back handler that matches most variants, anywhere
 @router.message(F.text.regexp(r"(?i)^\s*(?:/)?\s*(?:⬅️\s*)?back\s*$"))
 async def any_back(message: Message, state: FSMContext):
     await state.clear()
     user = get_user(message.from_user.id)
-    await message.answer(bold("🏠 Main Menu"), reply_markup=main_menu(user.get("is_premium")), parse_mode=ParseMode.HTML)
+    await message.answer(bold("🏠 Main Menu"), reply_markup=main_menu(user.get("is_premium"), show_admin=is_admin(message.from_user.id)), parse_mode=ParseMode.HTML)
 
 
 @router.message(Command("myinfo"))
@@ -108,7 +108,7 @@ async def cmd_myinfo(message: Message):
         f"• Hosted Bots: {len(get_user_bots(message.from_user.id))}\n"
         f"• Plan Expiry: {bold(human_dt(_safe_parse(user.get('premium_expiry'))))}\n"
     )
-    await message.answer(text, reply_markup=main_menu(user.get("is_premium")), parse_mode=ParseMode.HTML)
+    await message.answer(text, reply_markup=main_menu(user.get("is_premium"), show_admin=is_admin(message.from_user.id)), parse_mode=ParseMode.HTML)
 
 
 def _safe_parse(s):
@@ -232,7 +232,7 @@ async def on_how_it_works(message: Message):
         "• We prepare a secure runtime and get your bot online.\n"
         "• Free plan: 1 hour uptime; Premium: unlimited.\n"
     )
-    await message.answer(text, reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")), parse_mode=ParseMode.HTML)
+    await message.answer(text, reply_markup=main_menu(get_user(message.from_user.id).get("is_premium"), show_admin=is_admin(message.from_user.id)), parse_mode=ParseMode.HTML)
 
 
 @router.message(F.text == "💰 Upgrade to Premium")
@@ -521,7 +521,7 @@ async def user_logs_bot(message: Message):
 @router.message(F.text == "🏠 Main Menu")
 async def on_main_menu(message: Message):
     user = get_user(message.from_user.id)
-    await message.answer(bold("🏠 Main Menu"), reply_markup=main_menu(user.get("is_premium")), parse_mode=ParseMode.HTML)
+    await message.answer(bold("🏠 Main Menu"), reply_markup=main_menu(user.get("is_premium"), show_admin=is_admin(message.from_user
 
 
 
@@ -852,8 +852,8 @@ async def cb_manage(cb: CallbackQuery):
 @router.callback_query(F.data == "main_menu")
 async def cb_main_menu(cb: CallbackQuery):
     user = get_user(cb.from_user.id)
-    await cb.message.answer("🏠 Main Menu", reply_markup=main_menu(user.get("is_premium")), parse_mode=ParseMode.HTML)
-    await cb.answer()
+    await cb.message.answer("🏠 Main Menu", reply_markup=main_menu(user.get("is_premium"), show_admin=is_admin(cb.from_user.id)), parse_mode=ParseMode.HTML)
+    await cb.answ_codeernew(</)
 
 
 # User inline actions: stop, restart, remove, logs
