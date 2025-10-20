@@ -153,15 +153,39 @@ async def admin_reply(message: Message):
 async def admin_apps_msg(message: Message):
     if not is_admin(message.from_user.id):
         return
-    text = [bold("📦 Apps")]
+    text = [bold("📦 Apps — Hosted by Users")]
     db = _read_db()
     bots = list(db["bots"].values())
+
+    # Group bots by owner
+    owners = {}
     for b in bots:
-        text.append(
-            f"• {bold(b.get('name') or 'Unknown')} — ID {code(b['id'])} — Owner {code(str(b['owner_id']))} — "
-            f"Status: {bold(b['status'])}"
-        )
+        owners.setdefault(b["owner_id"], []).append(b)
+
+    if not owners:
+        await message.answer(bold("No bots yet."), reply_markup=admin_menu_apps(), parse_mode=ParseMode.HTML)
+        return
+
+    for owner_id, owner_bots in owners.items():
+        u = get_user(int(owner_id))
+        owner_display = _format_user_display(u)
+        text.append(f"\n{bold(owner_display)} ({code(str(owner_id))})")
+        for b in owner_bots:
+            text.append(
+                f"• {bold(b.get('name') or 'Unknown')} — ID {code(b['id'])} — Status: {bold(b['status'])}"
+            )
+
     await message.answer("\n".join(text), reply_markup=admin_menu_apps(), parse_mode=ParseMode.HTML)
+
+    # Quick action buttons for easy control
+    from .keyboards import bots_action_list
+    if bots:
+        await message.answer(bold("🛑 Stop a Bot") + "\nTap to stop:", reply_markup=bots_action_list(bots, "Stop", "admin_stop"), parse_mode=ParseMode.HTML)
+        await message.answer(bold("♻️ Restart a Bot") + "\nTap to restart:", reply_markup=bots_action_list(bots, "Restart", "admin_restart"), parse_mode=ParseMode.HTML)
+        await message.answer(bold("🗑️ Remove a Bot") + "\nTap to remove:", reply_markup=bots_action_list(bots, "Remove", "admin_remove"), parse_mode=ParseMode.HTML)
+        await message.answer(bold("📜 Bot Logs") + "\nTap to view:", reply_markup=bots_action_list(bots, "Logs", "admin_logs"), parse_mode=ParseMode.HTML)
+    else:
+        await message.answer(bold("No bots yet."), reply_markup=admin_menu_apps(), parse_mode=ParseMode.HTML)
 
     # Send quick action buttons for one-tap control
     from .keyboards import bots_action_list
@@ -513,14 +537,29 @@ async def admin_premium(cb: CallbackQuery):
 async def admin_apps(cb: CallbackQuery):
     if not is_admin(cb.from_user.id):
         return
-    text = [bold("📦 Apps")]
+    text = [bold("📦 Apps — Hosted by Users")]
     db = _read_db()
     bots = list(db["bots"].values())
+
+    # Group bots by owner
+    owners = {}
     for b in bots:
-        text.append(
-            f"• {bold(b.get('name') or 'Unknown')} — ID {code(b['id'])} — Owner {code(str(b['owner_id']))} — "
-            f"Status: {bold(b['status'])}"
-        )
+        owners.setdefault(b["owner_id"], []).append(b)
+
+    if not owners:
+        await cb.message.answer(bold("No bots yet."), reply_markup=admin_fixed_bar(), parse_mode=ParseMode.HTML)
+        await cb.answer()
+        return
+
+    for owner_id, owner_bots in owners.items():
+        u = get_user(int(owner_id))
+        owner_display = _format_user_display(u)
+        text.append(f"\n{bold(owner_display)} ({code(str(owner_id))})")
+        for b in owner_bots:
+            text.append(
+                f"• {bold(b.get('name') or 'Unknown')} — ID {code(b['id'])} — Status: {bold(b['status'])}"
+            )
+
     await cb.message.answer("\n".join(text), reply_markup=admin_fixed_bar(), parse_mode=ParseMode.HTML)
 
     # Inline quick action lists
