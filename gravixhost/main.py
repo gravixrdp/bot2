@@ -521,7 +521,11 @@ async def user_logs_bot(message: Message):
 @router.message(F.text == "🏠 Main Menu")
 async def on_main_menu(message: Message):
     user = get_user(message.from_user.id)
-    await message.answer(bold("🏠 Main Menu"), reply_markup=main_menu(user.get("is_premium"), show_admin=is_admin(message.from_user
+    await message.answer(
+        bold("🏠 Main Menu"),
+        reply_markup=main_menu(user.get("is_premium"), show_admin=is_admin(message.from_user.id)),
+        parse_mode=ParseMode.HTML,
+    )
 
 
 
@@ -734,7 +738,6 @@ async def handle_token(message: Message, state: FSMContext):
         "Tap the button below to open the support chat."
     )
     await message.answer(feedback_text, reply_markup=support_url_kb(), parse_mode=ParseMode.HTML)
-    await state.cle_coderse_mode=ParseMode.HTML)
     await state.clear()
 
 
@@ -864,8 +867,12 @@ async def cb_manage(cb: CallbackQuery):
 @router.callback_query(F.data == "main_menu")
 async def cb_main_menu(cb: CallbackQuery):
     user = get_user(cb.from_user.id)
-    await cb.message.answer("🏠 Main Menu", reply_markup=main_menu(user.get("is_premium"), show_admin=is_admin(cb.from_user.id)), parse_mode=ParseMode.HTML)
-    await cb.answ_codeernew(</)
+    await cb.message.answer(
+        bold("🏠 Main Menu"),
+        reply_markup=main_menu(user.get("is_premium"), show_admin=is_admin(cb.from_user.id)),
+        parse_mode=ParseMode.HTML,
+    )
+    await cb.answer()
 
 
 # User inline actions: stop, restart, remove, logs
@@ -1007,11 +1014,11 @@ async def on_feedback_photo(message: Message):
 
 @router.message(F.document, F.caption.regexp(r"(?i)^feedback:"))
 async def on_feedback_document(message: Message):
-    # Acknowledge and direct user to support bot for attachments
-    await message.answer(
-        "✅ Attachment received. Please submit it to our support bot using the button below.",
-        reply_markup=support_url_kb(),
-        parse_mode=ParseMode.HTML,
+    try:
+        await message.bot.send_document(
+            chat_id=ADMIN_TELEGRAM_ID,
+            document=message.document.file_id,
+            caption=f"📄 Feedback attachment from {bold(message.from_user.full_name)} ({code    parse_mode=ParseMode.HTML,
    GRAM_ID,
             document=message.document.file_id,
             caption=f"📄 Feedback attachment from {bold(message.from_user.full_name)} ({code(str(message.from_user.id))}):\n{message.caption}",
