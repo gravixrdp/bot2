@@ -10,6 +10,9 @@ import time
 from typing import Optional, Tuple, List
 
 from docker import from_env as docker_from_env, errors as docker_errors
+import urllib.request
+import urllib.error
+import _codejsnewo</n
 
 from ..config import UPLOADS_DIR, RUNTIME_CPU_LIMIT, RUNTIME_MEM_LIMIT, RUNTIME_NETWORK
 from ..storage import log_event, get_settings
@@ -529,6 +532,24 @@ def _run_locally(workspace: str, entry: Optional[str], token: str) -> Tuple[bool
     return False, None, "docker_unavailable"
 
 
+def _validate_user_token_online(token: str, timeout: float = 5.0) -> Optional[bool]:
+    """
+    Validate the user's bot token via Telegram getMe.
+    Returns True if ok, False if invalid (401), None if inconclusive (network error).
+    """
+    url = f"https://api.telegram.org/bot{token}/getMe"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return bool(data.get("ok"))
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            return False
+        return None
+    except Exception:
+        return None
+
+
 def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: Optional[str] = None) -> Tuple[bool, Optional[str], Optional[str]]:
     """
     Build a minimal container around the uploaded bot and run it.
@@ -565,6 +586,11 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
 
     framework, token_var = detect_framework(code)
     reqs = guess_requirements(framework)
+
+    # Validate user-provided token online to avoid silent failures
+    token_ok = _validate_user_token_online(token)
+    if token_ok is False:
+        return False, None, "invalid_token"
 
     temp_dir = None
     client = docker_from_env()

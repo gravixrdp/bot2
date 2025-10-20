@@ -160,7 +160,7 @@ async def cmd_upgrade(message: Message):
         "To upgrade, contact our admin directly at " + bold("@Dravonnbot") + ".\n"
         "Use the button below to open the chat."
     )
-    await message.answer(text, reply_markup=support_url_kb(), parse_mode=ParseMode.H_codep=support_url_kb(), parse_mode=ParseMode.HTML)
+    await message.answer(text, reply_markup=support_url_kb(), parse_mode=ParseMode.HTML)
 
 
 @router.message(Command("host"))
@@ -686,6 +686,13 @@ async def handle_token(message: Message, state: FSMContext):
             base_msg = (
                 bold("⚠️ Entry file not found") + "\n"
                 + "Please upload a .py file (e.g., bot.py/app.py/main.py) or a zip with your code."
+            )
+        elif err == "invalid_token":
+            base_msg = (
+                bold("❌ Invalid Bot Token") + "\n"
+                + "Jo token aapne diya hai wo @BotFather par invalid aa raha hai.\n"
+                + "• Token ko dobara verify karein: " + code("https://api.telegram.org/bot<TOKEN>/getMe") + "\n"
+                + "• Naya token generate karke bhejein aur phir host karein."
             )
         else:
             base_msg = (
