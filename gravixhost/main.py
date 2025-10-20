@@ -148,13 +148,14 @@ def _detect_entry(workspace: str, uploaded_filename: str) -> str:
 
 @router.message(Command("upgrade"))
 async def cmd_upgrade(message: Message):
+    user = get_user(message.from_user.id)
     text = (
         f"{bold('💎 Upgrade to Premium')}\n"
         "• Unlimited uptime\n"
         "• Host multiple bots\n"
         "• Priority support\n\n"
-        "Free users: contact our admin at " + bold("@dravonnbot") + " to upgrade.\n"
-        "Premium users cansage.answer(text, reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")), parse_mode=ParseMode.HTML)
+        "Free users: admin se upgrade ke liye DM karein " + bold("@dravonnbot") + ".\n"
+        "Premium users: aap 'r(message.from_user.id).get("is_premium")), parse_mode=ParseMode.HTML)
 
 
 @router.message(Command("host"))
