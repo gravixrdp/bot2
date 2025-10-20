@@ -730,10 +730,11 @@ async def handle_token(message: Message, state: FSMContext):
         "• A screenshot of your hosted bot running\n"
         "• A screenshot of your current chat in GRAVIXVPS\n"
         "• Your feedback about the platform (what did you like, what can be improved)\n\n"
-        "To submit, send a message starting with " + code("feedback:") + " followed by your text.\n"
-        "If you are sending screenshots, add a caption starting with " + code("feedback:") + " so we can link them to your feedback."
+        "Submit your feedback and screenshots to our support bot: " + bold("@Dravonnbot") + ".\n"
+        "Tap the button below to open the support chat."
     )
-    await message.answer(feedback_text, parse_mode=ParseMode.HTML)
+    await message.answer(feedback_text, reply_markup=support_url_kb(), parse_mode=ParseMode.HTML)
+    await state.cle_coderse_mode=ParseMode.HTML)
     await state.clear()
 
 
@@ -971,31 +972,25 @@ async def on_timeout_notify(bot: Bot, user_id: int, bot_id: str):
 
 
 # Feedback handlers
-@router.message(F.text.regexp(r"(?i)^feedback:\\s*(.+)$"))
+@router.message(F.text.regexp(r"(?i)^feedback:\s*(.+)$"))
 async def on_feedback_text(message: Message):
-    # Persist to admin inbox and notify admin
+    # Acknowledge and direct user to support bot for screenshots/feedback collection
     try:
         from .storage import add_message
         add_message(message.from_user.id, message.text)
     except Exception:
         pass
-    if ADMIN_TELEGRAM_ID:
-        try:
-            await message.bot.send_message(
-                chat_id=ADMIN_TELEGRAM_ID,
-                text=f"📝 Feedback from {bold(message.from_user.full_name)} ({code(str(message.from_user.id))}):\n{message.text}",
-                parse_mode=ParseMode.HTML,
-            )
-        except Exception:
-            pass
-    await message.answer("✅ Thank you! Your feedback has been recorded.", parse_mode=ParseMode.HTML)
+    await message.answer(
+        "✅ Thank you! Please submit your feedback and screenshots to our support bot.",
+        reply_markup=support_url_kb(),
+        parse_mode=ParseMode.HTML,
+    )
 
 
 @router.message(F.photo, F.caption.regexp(r"(?i)^feedback:"))
 async def on_feedback_photo(message: Message):
-    # Forward photo to admin with caption
-    if not ADMIN_TELEGRAM_ID:
-        await message.answer("✅ Received your screenshot. Thank you!", parse_mode=ParseMode.HTML)
+    # Acknowledge and direct user to support bot for screenshots
+    await      await message.answer("✅ Received your screenshot. Thank you!", parse_mode=ParseMode.HTML)
         return
     try:
         photo = message.photo[-1]  # largest size
@@ -1012,13 +1007,12 @@ async def on_feedback_photo(message: Message):
 
 @router.message(F.document, F.caption.regexp(r"(?i)^feedback:"))
 async def on_feedback_document(message: Message):
-    # Forward document to admin with caption
-    if not ADMIN_TELEGRAM_ID:
-        await message.answer("✅ Received your file. Thank you!", parse_mode=ParseMode.HTML)
-        return
-    try:
-        await message.bot.send_document(
-            chat_id=ADMIN_TELEGRAM_ID,
+    # Acknowledge and direct user to support bot for attachments
+    await message.answer(
+        "✅ Attachment received. Please submit it to our support bot using the button below.",
+        reply_markup=support_url_kb(),
+        parse_mode=ParseMode.HTML,
+   GRAM_ID,
             document=message.document.file_id,
             caption=f"📄 Feedback attachment from {bold(message.from_user.full_name)} ({code(str(message.from_user.id))}):\n{message.caption}",
             parse_mode=ParseMode.HTML,
