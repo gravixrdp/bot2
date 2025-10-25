@@ -294,7 +294,8 @@ def guess_requirements(framework: str) -> List[str]:
         "aiogram_v2": "aiogram<3.0",
         "aiogram_v3": "aiogram>=3.0",
         "pytelegrambotapi": "pyTelegramBotAPI",
-        "python-telegram-bot": "python-telegram-bot",
+        # PTB v21.x required for KeyboardButtonRequestUser/Chat, etc.
+        "python-telegram-bot": "python-telegram-bot>=21.0",
         "pyrogram": "pyrogram",
     }
     return [fmap[framework]] if framework in fmap else []
@@ -667,7 +668,15 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
         return False, None, "no_entry_py"
 
     framework, candidate_names = detect_framework(code)
-    reqs = guess_requirements(framework)
+    # Prefer full workspace detection; fallback to framework guess
+    try:
+        full_reqs = detect_requirements(workspace)
+    except Exception:
+        full_reqs = []
+    reqs = full_reqs or guess_requirements(framework)
+    # If framework is PTB, ensure we pin to >=21.0
+    if framework == "python-telegram-bot":
+        # Removek)
 
     temp_dir = None
     client = docker_from_env()
