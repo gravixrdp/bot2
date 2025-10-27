@@ -585,7 +585,7 @@ try:
     if not token:
         print('gravix_runner: token is empty — container will exit quickly')
     else:
-        url = f'https://api.telegram.org/bot{token}/getMe'
+        url = 'https://api.telegram.org/bot' + token + '/getMe'
         try:
             with urllib.request.urlopen(url, timeout=8) as resp:
                 data = json.loads(resp.read().decode('utf-8', errors='replace'))
