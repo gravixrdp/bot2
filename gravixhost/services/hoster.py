@@ -670,7 +670,8 @@ except Exception:
             f.write("RUN pip install -r requirements.autodetected.txt\n")
         # Then try user requirements if present
         f.write("RUN if [ -f requirements.txt ]; then pip install -r requirements.txt; fi\n")
-        f.write("ENV PYTHONUNBUFFERED=1\n")
+        # Ensure unbuffered output and make /app available on import path for multi-file projects
+        f.write("ENV PYTHONUNBUFFERED=1 PYTHONPATH=/app\n")
         if run_mode == "direct":
             # Directly run user's entry, token is available via env (BOT_TOKEN/TOKEN/TELEGRAM_TOKEN)
             f.write(f'CMD ["python", "-u", "/app/{entry_file}"]\n')
@@ -766,9 +767,7 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
         image_tag = f"hostbot_{user_id}_{bot_id}_{int(time.time())}".lower().replace(" ", "_").replace("-", "_")
         container_name = f"hostbot_{user_id}_{bot_id}_{int(time.time())}".lower().replace(" ", "_").replace("-", "_")
 
-        # Build image
-        log_event(f"Building image {image_tag} for {bot_id}")
-        client.images.build(path=temp_dir, tag=image_tag, rm=True, timeout=BUILD_TIMEOUT_SECS, dockerfile="Dockerfile")ild image (explicitly_event(f"Building image {image_tag} for {bot_id}")
+        # Build image (explicitly_event(f"Building image {image_tag} for {bot_id}")
         client.images.build(path=temp_dir, tag=image_tag, rm=True, timeout=BUILD_TIMEOUT_SECS)
 
         # Ensure network exists or use default bridge
@@ -811,6 +810,43 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
             container.reload()
             status = getattr(container, "status", "")
             if status != "running":
+                # Read exit code if available to distinguish normal exit vs error
+                exit_code = None
+                try:
+                    container.reload()
+                    exit_code = container.attrs.get("State", {}).get("ExitCode")
+                except Exception:
+                    exit_code = None
+
+                logs = get_runtime_logs(runtime_id, tail=800) or ""
+                lines = logs.splitlines() if logs else []
+                # Filter out runner noise lines
+                filtered = [l for l in lines if not l.startswith("gravix_runner:")]
+                # Extract a concise error line
+                short_err = ""
+                for line in filtered:
+                    if any(k in line for k in ("Traceback", "SyntaxError", "Error", "Exception", "Unauthorized", "InvalidToken", "ValueError", "RuntimeError")):
+                        short_err = line.strip()
+                        break
+                if not short_err and filtered:
+                    # Use last non-empty line (not from runner)
+                    for line in reversed(filtered):
+                        if line.strip():
+                            short_err = line.strip()
+                            break
+                # If still nothing useful, provide guidance
+                if not short_err:
+                    short_err = "process exited without error logs — ensure your bot starts a polling loop (e.g., app.run_polling())"
+
+                # Choose message based on exit code
+                msg = f"{short_err} (exit code {exit_code if exit_code is not None else '?'})"
+                log_event(f"Runtime crashed {runtime_id} for {bot_id}: {msg}")
+                # Stop and remove failed container (no restart policy)
+                try:
+                    client.api.remove_container(runtime_id, force=True)
+                except Exception:
+                    pass
+                return False, None, f"runtime_error: {msg}"atus != "running":
                 logs = get_runtime_logs(runtime_id, tail=100) or ""
                 # Extract a concise error line
                 short_err = ""
