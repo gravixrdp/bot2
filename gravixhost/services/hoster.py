@@ -547,8 +547,8 @@ def detect_requirements(workspace: str) -> List[str]:
 
 def write_runner_and_dockerfile(workspace: str, entry: Optional[str] = None, requirements: Optional[List[str]] = None):
     """
-    Write a stable Python runner and a valid Dockerfile with proper newlines.
-    This fixes the earlier issue where literal '\n' was written, breaking Dockerfile parsing.
+    Write a single Python runner and a valid Dockerfile (with proper newlines).
+    This removes duplicated writes and ensures clean contents.
     """
     entry_file = entry or "bot.py"
 
@@ -584,6 +584,9 @@ def _try_run():
 
 try:
     _try_run()
+    # If the user script returns immediately, provide a clear message.
+    print('gravix_runner: user script finished (no long-running loop)')
+    sys.exit(0)
 except ModuleNotFoundError as e:
     missing = getattr(e, 'name', None)
     if not missing and 'No module named' in str(e):
@@ -606,6 +609,8 @@ except ModuleNotFoundError as e:
         try:
             subprocess.check_call([sys.executable, '-m', 'pip', 'install', pkg])
             _try_run()
+            print('gravix_runner: user script finished (no long-running loop)')
+            sys.exit(0)
         except Exception:
             import traceback; traceback.print_exc(); sys.exit(1)
     else:
@@ -617,12 +622,12 @@ except Exception:
     traceback.print_exc()
     sys.exit(1)
 """
-    with open(runner_py, "w", encoding="utf-8") as f:
+    with open(runner_py, "w", encoding="utf-8", newline="\n") as f:
         f.write(runner_code)
 
     # Shell runner (compatibility)
     runner_sh = os.path.join(workspace, "gravix_runner.sh")
-    with open(runner_sh, "w", encoding="utf-8") as f:
+    with open(runner_sh, "w", encoding="utf-8", newline="\n") as f:
         f.write("#!/usr/bin/env bash\n")
         f.write("set -e\n")
         f.write('export BOT_TOKEN="${TELEGRAM_TOKEN}"\n')
@@ -633,13 +638,13 @@ except Exception:
     req_auto_path = None
     if requirements:
         req_auto_path = os.path.join(workspace, "requirements.autodetected.txt")
-        with open(req_auto_path, "w", encoding="utf-8") as rf:
+        with open(req_auto_path, "w", encoding="utf-8", newline="\n") as rf:
             rf.write("\n".join(requirements))
         # Also ensure a requirements.txt exists for user code
         req_txt_path = os.path.join(workspace, "requirements.txt")
         if not os.path.exists(req_txt_path):
             try:
-                with open(req_txt_path, "w", encoding="utf-8") as rtf:
+                with open(req_txt_path, "w", encoding="utf-8", newline="\n") as rtf:
                     rtf.write("\n".join(requirements))
             except Exception:
                 pass
@@ -651,9 +656,9 @@ except Exception:
     except Exception:
         run_mode = "runner"
 
-    # Write a valid Dockerfile (newlines, no escaped literal '\n')
+    # Write a valid Dockerfile
     dockerfile = os.path.join(workspace, "Dockerfile")
-    with open(dockerfile, "w", encoding="utf-8") as f:
+    with open(dockerfile, "w", encoding="utf-8", newline="\n") as f:
         f.write("FROM python:3.11-slim\n")
         f.write("WORKDIR /app\n")
         f.write("COPY . /app\n")
@@ -665,135 +670,14 @@ except Exception:
             f.write("RUN pip install -r requirements.autodetected.txt\n")
         # Then try user requirements if present
         f.write("RUN if [ -f requirements.txt ]; then pip install -r requirements.txt; fi\n")
-        f.write("ENV PYTHONUNBUFFERED=1\n")
+        # Ensure unbuffered output and make /app available on import path for multi-file projects
+        f.write("ENV PYTHONUNBUFFERED=1 PYTHONPATH=/app\n")
         if run_mode == "direct":
             # Directly run user's entry, token is available via env (BOT_TOKEN/TOKEN/TELEGRAM_TOKEN)
             f.write(f'CMD ["python", "-u", "/app/{entry_file}"]\n')
         else:
             # Use the Python runner to ensure token injection works for simple scripts
             f.write('CMD ["python", "/app/gravix_runner.py"]\n')
-    # Runner executes the detected entry file; token is passed via TELEGRAM_TOKEN env var
-    entry_file = entry or "bot.py"
-
-    # Python runner: injects token into globals so common patterns like BOT_TOKEN/TOKEN work
-    runner_py = os.path.join(workspace, "gravix_runner.py")
-    runner_code = f"""import os, runpy, sys, subprocess, threading, time, re
-
-token = os.getenv('TELEGRAM_TOKEN') or os.getenv('BOT_TOKEN') or ''
-# Expose in env for libraries that read from environment
-os.environ['BOT_TOKEN'] = token
-os.environ['TELEGRAM_TOKEN'] = token
-os.environ['TOKEN'] = token
-os.environ['TELEGRAM_BOT_TOKEN'] = token
-# Prepare globals so user code can reference BOT_TOKEN or TOKEN directly
-init_globals = {{'BOT_TOKEN': token, 'TOKEN': token, 'TELEGRAM_TOKEN': token}}
-# Ensure current working directory is the app root
-os.chdir(os.path.dirname(__file__))
-
-# Heartbeat thread to confirm liveness in logs
-def _heartbeat():
-    while True:
-        try:
-            print('gravix_runner: heartbeat alive')
-        except Exception:
-            pass
-        time.sleep(30)
-threading.Thread(target=_heartbeat, daemon=True).start()
-
-# Run the user's entry file in this process
-print('gravix_runner: entry={entry_file} token_len=%d' % (len(token)))
-def _try_run():
-    runpy.run_path('{entry_file}', init_globals=init_globals)
-
-try:
-    _try_run()
-except ModuleNotFoundError as e:
-    missing = getattr(e, 'name', None)
-    if not missing and 'No module named' in str(e):
-        m = re.search(r"No module named ['\\\"]([^'\\\"]+)['\\\"]", str(e))
-        if m:
-            missing = m.group(1)
-    _MAP = {{
-        'telebot': 'pyTelegramBotAPI',
-        'telegram': 'python-telegram-bot',
-        'PIL': 'pillow',
-        'cv2': 'opencv-python',
-        'bs4': 'beautifulsoup4',
-        'yaml': 'pyyaml',
-        'Crypto': 'pycryptodome',
-        'OpenSSL': 'pyOpenSSL',
-    }}
-    pkg = _MAP.get(missing)
-    if pkg:
-        print('gravix_runner: auto-installing %s for missing module %s' % (pkg, missing))
-        try:
-            subprocess.check_call([sys.executable, '-m', 'pip', 'install', pkg])
-            _try_run()
-        except Exception:
-            import traceback; traceback.print_exc(); sys.exit(1)
-    else:
-        raise
-except SystemExit:
-    raise
-except Exception:
-    import traceback
-    traceback.print_exc()
-    sys.exit(1)
-"""
-    with open(runner_py, "w") as f:
-        f.write(runner_code)
-
-    # Shell runner (not used by CMD anymore; kept for compatibility)
-    runner_sh = os.path.join(workspace, "gravix_runner.sh")
-    with open(runner_sh, "w") as f:
-        f.write("#!/usr/bin/env bash\\n")
-        f.write("set -e\\n")
-        f.write('export BOT_TOKEN="${TELEGRAM_TOKEN}"\\n')
-        f.write("python gravix_runner.py\\n")
-    os.chmod(runner_sh, 0o755)
-
-    # Write autodetected requirements file (preferred)
-    req_auto_path = None
-    if requirements:
-        req_auto_path = os.path.join(workspace, "requirements.autodetected.txt")
-        with open(req_auto_path, "w") as rf:
-            rf.write("\\n".join(requirements))
-        # Also ensure a requirements.txt exists for user code
-        req_txt_path = os.path.join(workspace, "requirements.txt")
-        if not os.path.exists(req_txt_path):
-            try:
-                with open(req_txt_path, "w") as rtf:
-                    rtf.write("\\n".join(requirements))
-            except Exception:
-                pass
-
-    # Decide run mode from settings
-    try:
-        settings = get_settings()
-        run_mode = str(settings.get("run_mode", "runner")).lower()
-    except Exception:
-        run_mode = "runner"
-
-    dockerfile = os.path.join(workspace, "Dockerfile")
-    with open(dockerfile, "w") as f:
-        f.write("FROM python:3.11-slim\\n")
-        f.write("WORKDIR /app\\n")
-        f.write("COPY . /app\\n")
-        # Basic system deps that frequently help builds (kept minimal)
-        f.write("RUN apt-get update && apt-get install -y --no-install-recommends build-essential && rm -rf /var/lib/apt/lists/*\\n")
-        f.write("RUN pip install --no-cache-dir --upgrade pip\\n")
-        # Prefer installing autodetected requirements first (clean set)
-        if req_auto_path:
-            f.write("RUN pip install -r requirements.autodetected.txt\\n")
-        # Then try user requirements if present
-        f.write("RUN if [ -f requirements.txt ]; then pip install -r requirements.txt; fi\\n")
-        f.write("ENV PYTHONUNBUFFERED=1\\n")
-        if run_mode == "direct":
-            # Directly run user's entry, token is available via env (BOT_TOKEN/TOKEN/TELEGRAM_TOKEN)
-            f.write(f'CMD ["python", "-u", "/app/{entry_file}"]\\n')
-        else:
-            # Use the Python runner to ensure token injection works for simple scripts
-            f.write('CMD ["python", "/app/gravix_runner.py"]\\n')
 
 
 def _docker_available() -> bool:
@@ -883,8 +767,7 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
         image_tag = f"hostbot_{user_id}_{bot_id}_{int(time.time())}".lower().replace(" ", "_").replace("-", "_")
         container_name = f"hostbot_{user_id}_{bot_id}_{int(time.time())}".lower().replace(" ", "_").replace("-", "_")
 
-        # Build image
-        log_event(f"Building image {image_tag} for {bot_id}")
+        # Build image (explicitly_event(f"Building image {image_tag} for {bot_id}")
         client.images.build(path=temp_dir, tag=image_tag, rm=True, timeout=BUILD_TIMEOUT_SECS)
 
         # Ensure network exists or use default bridge
@@ -916,7 +799,8 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
             mem_limit=DEFAULT_MEM_LIMIT,
             pids_limit=DEFAULT_PIDS_LIMIT,
             network=network if network else None,
-            restart_policy={"Name": "unless-stopped"},
+            # Do not auto-restart; if user code exits quickly we want to surface the error and stop
+            restart_policy={"Name": "no"},
         )
 
         runtime_id = container.id
@@ -926,6 +810,43 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
             container.reload()
             status = getattr(container, "status", "")
             if status != "running":
+                # Read exit code if available to distinguish normal exit vs error
+                exit_code = None
+                try:
+                    container.reload()
+                    exit_code = container.attrs.get("State", {}).get("ExitCode")
+                except Exception:
+                    exit_code = None
+
+                logs = get_runtime_logs(runtime_id, tail=800) or ""
+                lines = logs.splitlines() if logs else []
+                # Filter out runner noise lines
+                filtered = [l for l in lines if not l.startswith("gravix_runner:")]
+                # Extract a concise error line
+                short_err = ""
+                for line in filtered:
+                    if any(k in line for k in ("Traceback", "SyntaxError", "Error", "Exception", "Unauthorized", "InvalidToken", "ValueError", "RuntimeError")):
+                        short_err = line.strip()
+                        break
+                if not short_err and filtered:
+                    # Use last non-empty line (not from runner)
+                    for line in reversed(filtered):
+                        if line.strip():
+                            short_err = line.strip()
+                            break
+                # If still nothing useful, provide guidance
+                if not short_err:
+                    short_err = "process exited without error logs — ensure your bot starts a polling loop (e.g., app.run_polling())"
+
+                # Choose message based on exit code
+                msg = f"{short_err} (exit code {exit_code if exit_code is not None else '?'})"
+                log_event(f"Runtime crashed {runtime_id} for {bot_id}: {msg}")
+                # Stop and remove failed container (no restart policy)
+                try:
+                    client.api.remove_container(runtime_id, force=True)
+                except Exception:
+                    pass
+                return False, None, f"runtime_error: {msg}"atus != "running":
                 logs = get_runtime_logs(runtime_id, tail=100) or ""
                 # Extract a concise error line
                 short_err = ""
