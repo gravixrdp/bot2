@@ -579,6 +579,22 @@ threading.Thread(target=_heartbeat, daemon=True).start()
 
 # Run the user's entry file in this process
 print('gravix_runner: entry={entry_file} token_len=%d' % (len(token)))
+# Basic token sanity + online check to surface clear diagnostics
+try:
+    import json, urllib.request
+    if not token:
+        print('gravix_runner: token is empty — container will exit quickly')
+    else:
+        url = f'https://api.telegram.org/bot{token}/getMe'
+        try:
+            with urllib.request.urlopen(url, timeout=8) as resp:
+                data = json.loads(resp.read().decode('utf-8', errors='replace'))
+                ok = bool(data.get('ok'))
+                print('gravix_runner: getMe ok=%s' % ok)
+        except Exception as _e:
+            print('gravix_runner: getMe check failed:', _e)
+except Exception as _e:
+    print('gravix_runner: pre-check exception:', _e)
 def _try_run():
     runpy.run_path('{entry_file}', init_globals=init_globals)
 
@@ -820,8 +836,8 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
 
                 logs = get_runtime_logs(runtime_id, tail=800) or ""
                 lines = logs.splitlines() if logs else []
-                # Filter out runner noise lines
-                filtered = [l for l in lines if not l.startswith("gravix_runner:")]
+                # Do not filter out runner diagnostics; they often contain token length and entry info
+                filtered = lines
                 # Extract a concise error line
                 short_err = ""
                 for line in filtered:
