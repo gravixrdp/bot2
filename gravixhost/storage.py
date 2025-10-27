@@ -207,7 +207,11 @@ def update_user(user_id: int, **kwargs):
     users = db["users"]
     user = users.get(str(user_id)) or get_user(user_id)
     # Only apply non-None values to avoid overwriting with None
-    for)
+    for k, v in kwargs.items():
+        if v is not None:
+            user[k] = v
+    users[str(user_id)] = user
+    _write_db(db)
 
 
 def set_premium(user_id: int, days: int):
