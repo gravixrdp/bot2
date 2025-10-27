@@ -743,25 +743,61 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
     client = docker_from_env()
     try:
         temp_dir = tempfile.mkdtemp()
+
+        # Copy entire user workspace into temp_dir to preserve multi-file projects
+        try:
+            for item in os.listdir(workspace):
+                src_path = os.path.join(workspace, item)
+                dst_path = os.path.join(temp_dir, item)
+                if os.path.isdir(src_path):
+                    shutil.copytree(src_path, dst_path, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(src_path, dst_path)
+        except Exception:
+            # Best effort; continue with what we could copy
+            pass
+
         # Rewrite code to read token from environment where possible and fix common syntax issues
         try:
             code = rewrite_token_in_code(code, env_keys=_ENV_KEYS_DEFAULT, candidate_vars=candidate_names)
         except Exception:
             code = _fix_common_syntax_issues(code)
 
-        # Write code and requirements to temp dir
-        with open(os.path.join(temp_dir, "bot.py"), "w", encoding="utf-8") as f:
+        # Overwrite the entry file in temp_dir with the rewritten code
+        with open(os.path.join(temp_dir, entry_file or "bot.py"), "w", encoding="utf-8") as f:
             f.write(code)
-        with open(os.path.join(temp_dir, "requirements.txt"), "w", encoding="utf-8") as f:
-            f.write("\n".join(reqs) if reqs else "")
 
-        # Write runner and Dockerfile (stable path)
-        write_runner_and_dockerfile(temp_dir, entry="bot.py", requirements=reqs)
+        # Ensure requirements.txt exists (merge detected requirements if needed)
+        req_path = os.path.join(temp_dir, "requirements.txt")
+        if os.path.exists(req_path):
+            try:
+                # Append any missing detected requirements to the existing requirements.txt
+                existing = set()
+                with open(req_path, "r", encoding="utf-8", errors="ignore") as rf:
+                    for line in rf:
+                        s = (line or "").strip()
+                        if s:
+                            existing.add(s)
+                for r in reqs:
+                    if r not in existing:
+                        existing.add(r)
+                with open(req_path, "w", encoding="utf-8") as wf:
+                    wf.write("\n".join(sorted(existing)))
+            except Exception:
+                # If merge fails, fall back to writing our detected set
+                with open(req_path, "w", encoding="utf-8") as wf:
+                    wf.write("\n".join(reqs) if reqs else "")
+        else:
+            with open(req_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(reqs) if reqs else "")
+
+        # Write runner and Dockerfile in the temp_dir (stable path)
+        write_runner_and_dockerfile(temp_dir, entry=entry_file or "bot.py", requirements=reqs)
 
         image_tag = f"hostbot_{user_id}_{bot_id}_{int(time.time())}".lower().replace(" ", "_").replace("-", "_")
         container_name = f"hostbot_{user_id}_{bot_id}_{int(time.time())}".lower().replace(" ", "_").replace("-", "_")
 
-        # Build image (explicitly set dockerfile to avoid daemon mis-parsing)
+        # Build image
         log_event(f"Building image {image_tag} for {bot_id}")
         client.images.build(path=temp_dir, tag=image_tag, rm=True, timeout=BUILD_TIMEOUT_SECS, dockerfile="Dockerfile")
 
@@ -798,21 +834,34 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
         )
 
         runtime_id = container.id
-        # Short health check: if the container crashes immediately, surface error to user
+        # Health check loop: give the container a few seconds to settle and capture meaningful error lines
         try:
-            time.sleep(2)
-            container.reload()
-            status = getattr(container, "status", "")
+            max_wait = 8
+            waited = 0
+            while waited < max_wait:
+                time.sleep(1)
+                waited += 1
+                try:
+                    container.reload()
+                    status = getattr(container, "status", "")
+                except Exception:
+                    status = ""
+                if status == "running":
+                    break
             if status != "running":
-                logs = get_runtime_logs(runtime_id, tail=100) or ""
+                logs = get_runtime_logs(runtime_id, tail=500) or ""
                 # Extract a concise error line
                 short_err = ""
                 for line in (logs.splitlines() if logs else []):
-                    if "Traceback" in line or "SyntaxError" in line or "Error" in line or "Exception" in line:
+                    if any(k in line for k in ("Traceback", "SyntaxError", "Error", "Exception", "Unauthorized", "InvalidToken")):
                         short_err = line.strip()
                         break
                 if not short_err and logs:
-                    short_err = logs.splitlines()[-1].strip()
+                    # Use last non-empty line
+                    for line in reversed(logs.splitlines()):
+                        if line.strip():
+                            short_err = line.strip()
+                            break
                 log_event(f"Runtime crashed {runtime_id} for {bot_id}: {short_err or 'see container logs'}")
                 # Stop and remove failed container
                 try:
