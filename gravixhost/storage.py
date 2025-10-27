@@ -1,15 +1,49 @@
 import json
 import os
+import tempfile
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 
 from .config import DB_PATH, DATA_DIR, FREE_PLAN_DURATION, RUNTIME_CPU_LIMIT, RUNTIME_MEM_LIMIT, RUNTIME_NETWORK
 
 
+def _resolve_db_path() -> str:
+    base_dir = DATA_DIR
+    os.makedirs(base_dir, exist_ok=True)
+    target = DB_PATH
+    # Try to create file if missing and test writability
+    try:
+        if not os.path.exists(target):
+            with open(target, "w") as f:
+                json.dump({"users": {}, "bots": {}, "logs": [], "messages": [], "settings": {}}, f)
+        else:
+            with open(target, "a"):
+                pass
+        return target
+    except Exception:
+        # Fallback to XDG data home
+        xdg = os.getenv("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share", "gravixhost")
+        try:
+            os.makedirs(xdg, exist_ok=True)
+            fallback = os.path.join(xdg, "db.json")
+            if not os.path.exists(fallback):
+                with open(fallback, "w") as f:
+                    json.dump({"users": {}, "bots": {}, "logs": [], "messages": [], "settings": {}}, f)
+            return fallback
+        except Exception:
+            # Last resort: tmp
+            tmp_dir = os.path.join(tempfile.gettempdir(), "gravixhost")
+            os.makedirs(tmp_dir, exist_ok=True)
+            return os.path.join(tmp_dir, "db.json")
+
+
+_DB_PATH = _resolve_db_path()
+
+
 def _ensure_dirs():
-    os.makedirs(DATA_DIR, exist_ok=True)
-    if not os.path.exists(DB_PATH):
-        with open(DB_PATH, "w") as f:
+    os.makedirs(os.path.dirname(_DB_PATH) or DATA_DIR, exist_ok=True)
+    if not os.path.exists(_DB_PATH):
+        with open(_DB_PATH, "w") as f:
             json.dump({"users": {}, "bots": {}, "logs": [], "messages": [], "settings": {}}, f)
 
 
@@ -17,9 +51,8 @@ _ensure_dirs()
 
 
 def _read_db() -> Dict[str, Any]:
-    with open(DB_PATH, "r") as f:
+    with open(_DB_PATH, "r") as f:
         db = json.load(f)
-    # Ensure keys exist
     db.setdefault("users", {})
     db.setdefault("bots", {})
     db.setdefault("logs", [])
@@ -29,8 +62,19 @@ def _read_db() -> Dict[str, Any]:
 
 
 def _write_db(db: Dict[str, Any]):
-    with open(DB_PATH, "w") as f:
-        json.dump(db, f, indent=2)
+    # Atomic write to reduce permission/partial write issues
+    dirpath = os.path.dirname(_DB_PATH) or "."
+    fd, tmp_path = tempfile.mkstemp(dir=dirpath, prefix="db_", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(db, f, indent=2)
+        os.replace(tmp_path, _DB_PATH)
+    finally:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
 
 
 def log_event(event: str, scope: str = "user"):
