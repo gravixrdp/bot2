@@ -810,10 +810,12 @@ def _run_locally(workspace: str, entry: Optional[str], token: str) -> Tuple[bool
 
 def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: Optional[str] = None) -> Tuple[bool, Optional[str], Optional[str]]:
     """
-    Replace previous multi-file workspace build with single-file, temp-dir based flow
-    similar to the provided method: detect framework, guess minimal requirements,
-    write bot.py and Dockerfile into a temp dir, build, and run.
-    Additionally detects immediate runtime crashes and surfaces a concise error.
+    Hardened build+run:
+    - Detect framework and imports
+    - Rewrite token reads to environment
+    - Always run via a stable runner that injects token into globals (BOT_TOKEN/TOKEN/TELEGRAM_TOKEN)
+    - Include user's requirements.txt (sanitized) plus detected/guessed requirements
+    - Pass TELEGRAM_TOKEN at run time to avoid relying on Dockerfile ENV
     """
     if not _docker_available():
         log_event("Docker not available. Aborting deployment.")
@@ -850,9 +852,8 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
     except Exception:
         full_reqs = []
     reqs = full_reqs or guess_requirements(framework)
-    # If framework is PTB, ensure we pin to >=21.0
-    if framework == "python-telegram-bot":
-        # Remove older specs and enforce >=21.0
+    # Ensure PTB is pinned to >=21.0 if detected
+    if any(r.lower().startswith("python-telegram-bot") for r in reqs):
         reqs = [r for r in reqs if not r.lower().startswith("python-telegram-bot")]
         reqs.append("python-telegram-bot>=21.0")
 
@@ -860,42 +861,20 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
     client = docker_from_env()
     try:
         temp_dir = tempfile.mkdtemp()
-        # Rewrite code to read token from environment if possible and fix common syntax issues
+        # Rewrite code to read token from environment where possible and fix common syntax issues
         try:
             code = rewrite_token_in_code(code, env_keys=_ENV_KEYS_DEFAULT, candidate_vars=candidate_names)
         except Exception:
-            # Still attempt to fix common f-string quote issues even if rewrite fails
             code = _fix_common_syntax_issues(code)
+
         # Write code and requirements to temp dir
         with open(os.path.join(temp_dir, "bot.py"), "w", encoding="utf-8") as f:
             f.write(code)
         with open(os.path.join(temp_dir, "requirements.txt"), "w", encoding="utf-8") as f:
             f.write("\n".join(reqs) if reqs else "")
 
-        # Base image selection based on framework
-        base_img = AIOGRAM_V2_IMAGE if framework == "aiogram_v2" else DEFAULT_BASE_IMAGE
-        # Build ENV lines for all candidate names
-        env_lines = [
-            f"ENV {name}={token}"
-            for name in (candidate_names or [])
-            if isinstance(name, str) and name.strip()
-        ]
-        # Also add uppercase variants for env-like names
-        for name in list(candidate_names or []):
-            if name.upper() not in candidate_names:
-                env_lines.append(f"ENV {name.upper()}={token}")
-
-        dockerfile = (
-            f"FROM {base_img}\n"
-            "WORKDIR /app\n"
-            "COPY requirements.txt .\n"
-            "RUN pip install --no-cache-dir -r requirements.txt\n"
-            "COPY bot.py .\n"
-            + "\n".join(env_lines) + "\n"
-            'CMD ["python","-u","bot.py"]\n'
-        )
-        with open(os.path.join(temp_dir, "Dockerfile"), "w", encoding="utf-8") as f:
-            f.write(dockerfile)
+        # Write runner and Dockerfile (stable path)
+        write_runner_and_dockerfile(temp_dir, entry="bot.py", requirements=reqs)
 
         image_tag = f"hostbot_{user_id}_{bot_id}_{int(time.time())}".lower().replace(" ", "_").replace("-", "_")
         container_name = f"hostbot_{user_id}_{bot_id}_{int(time.time())}".lower().replace(" ", "_").replace("-", "_")
@@ -916,11 +895,19 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
                 log_event(f"Could not verify/create network '{network}', proceeding with defaults.")
                 network = None
 
-        # Run container with simple resource limits (same-to-same style)
+        # Run container with TELEGRAM_TOKEN env and resource limits
         container = client.containers.run(
             image_tag,
             name=container_name,
             detach=True,
+            environment={
+                # Primary token env
+                "TELEGRAM_TOKEN": token,
+                # Common aliases to maximize compatibility
+                "BOT_TOKEN": token,
+                "TOKEN": token,
+                "TELEGRAM_BOT_TOKEN": token,
+            },
             cpu_quota=DEFAULT_CPU_QUOTA,
             mem_limit=DEFAULT_MEM_LIMIT,
             pids_limit=DEFAULT_PIDS_LIMIT,
