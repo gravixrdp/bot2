@@ -15,6 +15,148 @@ from ..config import UPLOADS_DIR, RUNTIME_CPU_LIMIT, RUNTIME_MEM_LIMIT, RUNTIME_
 from ..storage import log_event, get_settings
 from .ai_assistant import suggest_fix
 
+# ---- Token rewriting utilities ------------------------------------------------
+
+_ENV_KEYS_DEFAULT = ["TELEGRAM_TOKEN", "BOT_TOKEN", "TOKEN", "TELEGRAM_BOT_TOKEN"]
+
+
+def _env_read_expr(env_keys: List[str]) -> ast.AST:
+    """
+    Build AST expression: os.getenv(k1) or os.getenv(k2) or ... or ""
+    """
+    keys = env_keys or _ENV_KEYS_DEFAULT
+    # os.getenv(keys[0])
+    expr: ast.AST = ast.Call(
+        func=ast.Attribute(value=ast.Name(id="os", ctx=ast.Load()), attr="getenv", ctx=ast.Load()),
+        args=[ast.Constant(value=keys[0])],
+        keywords=[]
+    )
+    for k in keys[1:]:
+        expr = ast.BoolOp(
+            op=ast.Or(),
+            values=[
+                expr,
+                ast.Call(
+                    func=ast.Attribute(value=ast.Name(id="os", ctx=ast.Load()), attr="getenv", ctx=ast.Load()),
+                    args=[ast.Constant(value=k)],
+                    keywords=[]
+                ),
+            ],
+        )
+    # Fallback empty string
+    expr = ast.BoolOp(op=ast.Or(), values=[expr, ast.Constant(value="")])
+    return expr
+
+
+class _TokenRewriter(ast.NodeTransformer):
+    """
+    Rewrites token assignments and constructor arguments to read from environment.
+    - VAR = "123456:ABC-DEF..."  -> VAR = os.getenv(...) or ""
+    - VAR = "YOUR_BOT_TOKEN_HERE" -> VAR = os.getenv(...) or VAR
+    - Bot(VAR) / Bot(token=VAR) / ApplicationBuilder().token(VAR) -> token env-read
+    """
+    def __init__(self, env_keys: Optional[List[str]] = None, candidate_vars: Optional[List[str]] = None):
+        super().__init__()
+        self.env_keys = env_keys or _ENV_KEYS_DEFAULT
+        self.candidate_vars = set(v for v in (candidate_vars or []) if isinstance(v, str))
+        self.need_import_os = False
+
+    def _is_token_literal(self, s: str) -> bool:
+        if not isinstance(s, str):
+            return False
+        # Exact token-like pattern
+        if re.match(r"^[0-9]+:[A-Za-z0-9_-]+$", s):
+            return True
+        # Common placeholders
+        low = s.lower()
+        return "bot_token" in low or "token" in low or "your_bot_token" in low
+
+    def _env_expr(self) -> ast.AST:
+        self.need_import_os = True
+        return _env_read_expr(self.env_keys)
+
+    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+        try:
+            target = node.targets[0]
+            var_name = target.id if isinstance(target, ast.Name) else None
+            # Replace assignment to candidate or literal tokens
+            if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                if self._is_token_literal(node.value.value) or (var_name and var_name in self.candidate_vars):
+                    return ast.Assign(targets=node.targets, value=self._env_expr())
+            if var_name and var_name in self.candidate_vars and isinstance(node.value, ast.Call):
+                # VAR = getenv(...)
+                if isinstance(node.value.func, ast.Attribute) and node.value.func.attr == "getenv":
+                    return ast.Assign(targets=node.targets, value=self._env_expr())
+                if isinstance(node.value.func, ast.Name) and node.value.func.id == "getenv":
+                    return ast.Assign(targets=node.targets, value=self._env_expr())
+        except Exception:
+            pass
+        return self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        try:
+            # ApplicationBuilder().token(ARG)
+            if isinstance(node.func, ast.Attribute) and node.func.attr == "token":
+                if node.args:
+                    arg0 = node.args[0]
+                    if isinstance(arg0, ast.Constant) and isinstance(arg0.value, str) and self._is_token_literal(arg0.value):
+                        node.args[0] = self._env_expr()
+                    elif isinstance(arg0, ast.Name) and (arg0.id in self.candidate_vars or arg0.id.upper() in self.candidate_vars):
+                        node.args[0] = self._env_expr()
+                for kw in node.keywords or []:
+                    if kw.arg and kw.arg.lower() == "token":
+                        node.value = self._env_expr()
+
+            # Bot(...), TeleBot(...), Client(...): positional 0 or keyword 'token'
+            func_name = None
+            if isinstance(node.func, ast.Name):
+                func_name = node.func.id
+            elif isinstance(node.func, ast.Attribute):
+                func_name = node.func.attr
+            if func_name in {"Bot", "TeleBot", "Client"}:
+                if node.args:
+                    arg0 = node.args[0]
+                    if isinstance(arg0, ast.Constant) and isinstance(arg0.value, str) and self._is_token_literal(arg0.value):
+                        node.args[0] = self._env_expr()
+                    elif isinstance(arg0, ast.Name) and (arg0.id in self.candidate_vars or arg0.id.upper() in self.candidate_vars):
+                        node.args[0] = self._env_expr()
+                for kw in node.keywords or []:
+                    if kw.arg and kw.arg.lower() == "token":
+                        val = kw.value
+                        if isinstance(val, ast.Constant) and isinstance(val.value, str) and self._is_token_literal(val.value):
+                            kw.value = self._env_expr()
+                        elif isinstance(val, ast.Name) and (val.id in self.candidate_vars or val.id.upper() in self.candidate_vars):
+                            kw.value = self._env_expr()
+        except Exception:
+            pass
+        return self.generic_visit(node)
+
+
+def rewrite_token_in_code(code: str, env_keys: Optional[List[str]] = None, candidate_vars: Optional[List[str]] = None) -> str:
+    """
+    Return a modified code string with token reads redirected to environment.
+    Ensures 'import os' exists if needed.
+    """
+    try:
+        tree = ast.parse(code)
+        rewriter = _TokenRewriter(env_keys=env_keys, candidate_vars=candidate_vars)
+        new_tree = rewriter.visit(tree)
+        ast.fix_missing_locations(new_tree)
+        new_code = ast.unparse(new_tree)
+        # Prepend import os if needed and not present
+        if rewriter.need_import_os and "import os" not in new_code:
+            new_code = "import os\n" + new_code
+        return new_code
+    except Exception:
+        # Fallback: prepend an env token shim
+        shim = (
+            "import os\n"
+            "_t = os.getenv('TELEGRAM_TOKEN') or os.getenv('BOT_TOKEN') or os.getenv('TOKEN') or os.getenv('TELEGRAM_BOT_TOKEN') or ''\n"
+            "TOKEN = _t or globals().get('TOKEN','')\n"
+            "BOT_TOKEN = _t or globals().get('BOT_TOKEN','')\n"
+        )
+        return shim + "\n" + code
+
 # Defaults aligned with requested hosting flow
 DEFAULT_BASE_IMAGE = "python:3.11-slim"
 AIOGRAM_V2_IMAGE = "python:3.9-slim"
@@ -149,12 +291,29 @@ def _normalize_requirement(name: str) -> Optional[str]:
     return mapped
 
 
-def detect_framework(code: str) -> Tuple[str, str]:
+def detect_framework(code: str) -> Tuple[str, List[str]]:
     """
-    Detect common Telegram bot frameworks from code and try to discover token var name.
-    Returns (framework_key, token_var_name)
+    Detect common Telegram bot frameworks and discover candidate token env/var names.
+    Returns (framework_key, candidate_names)
+    candidate_names can include variable identifiers and environment variable keys.
     """
-    framework, token_var = "unknown", "TOKEN"
+    framework = "unknown"
+    candidates: List[str] = ["TOKEN", "BOT_TOKEN", "TELEGRAM_TOKEN", "TELEGRAM_BOT_TOKEN"]
+
+    # Helper: add unique, safe names
+    def _add(name: Optional[str]):
+        if not name:
+            return
+        s = str(name).strip().strip("'\"")
+        if not s:
+            return
+        # Basic sanity for env/var names
+        import re as _re
+        if not _re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", s):
+            return
+        if s not in candidates:
+            candidates.append(s)
+
     try:
         tree = ast.parse(code)
         imports = set()
@@ -172,18 +331,104 @@ def detect_framework(code: str) -> Tuple[str, str]:
             framework = "python-telegram-bot"
         elif "pyrogram" in imports:
             framework = "pyrogram"
-    except Exception:
-        pass
 
+        # Scan assignments like VAR = "123456:ABC-DEF..." or VAR = os.getenv("NAME")
+        for node in ast.walk(tree):
+            try:
+                if isinstance(node, ast.Assign) and node.targets:
+                    # Target name
+                    target = node.targets[0]
+                    var_name = target.id if isinstance(target, ast.Name) else None
+
+                    # Right-hand side
+                    if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                        s = node.value.value
+                        if re.match(r"^[0-9]+:[A-Za-z0-9_-]+$", s):
+                            _add(var_name)
+                    elif isinstance(node.value, ast.Call):
+                        # os.getenv("NAME")
+                        if isinstance(node.value.func, ast.Attribute) and node.value.func.attr == "getenv":
+                            if node.value.args and isinstance(node.value.args[0], ast.Constant) and isinstance(node.value.args[0].value, str):
+                                _add(node.value.args[0].value)
+                                _add(var_name)
+                        elif isinstance(node.value.func, ast.Name) and node.value.func.id == "getenv":
+                            if node.value.args and isinstance(node.value.args[0], ast.Constant) and isinstance(node.value.args[0].value, str):
+                                _add(node.value.args[0].value)
+                                _add(var_name)
+                # Detect constructor usage and pull the arg source
+                if isinstance(node, ast.Call):
+                    func_name = None
+                    if isinstance(node.func, ast.Name):
+                        func_name = node.func.id
+                    elif isinstance(node.func, ast.Attribute):
+                        func_name = node.func.attr
+
+                    # aiogram Bot(...), telebot.TeleBot(...), ApplicationBuilder().token(...)
+                    if func_name in {"Bot", "TeleBot", "Client"}:
+                        # First positional or keyword 'token'
+                        tok_expr = None
+                        if node.args:
+                            tok_expr = node.args[0]
+                        for kw in getattr(node, "keywords", []):
+                            if kw.arg and kw.arg.lower() == "token":
+                                tok_expr = kw.value
+                                break
+                        if isinstance(tok_expr, ast.Name):
+                            _add(tok_expr.id)
+                        elif isinstance(tok_expr, ast.Call):
+                            # getenv in constructor
+                            if isinstance(tok_expr.func, ast.Attribute) and tok_expr.func.attr == "getenv":
+                                if tok_expr.args and isinstance(tok_expr.args[0], ast.Constant) and isinstance(tok_expr.args[0].value, str):
+                                    _add(tok_expr.args[0].value)
+                            elif isinstance(tok_expr.func, ast.Name) and tok_expr.func.id == "getenv":
+                                if tok_expr.args and isinstance(tok_expr.args[0], ast.Constant) and isinstance(tok_expr.args[0].value, str):
+                                    _add(tok_expr.args[0].value)
+                    # python-telegram-bot: ApplicationBuilder().token(VAR).build()
+                    if isinstance(node.func, ast.Attribute) and node.func.attr == "token":
+                        if node.args:
+                            tok_expr = node.args[0]
+                            if isinstance(tok_expr, ast.Name):
+                                _add(tok_expr.id)
+                            elif isinstance(tok_expr, ast.Constant) and isinstance(tok_expr.value, str):
+                                # hardcoded token literal (can't override), ignore
+                                pass
+                            elif isinstance(tok_expr, ast.Call):
+                                if isinstance(tok_expr.func, ast.Attribute) and tok_expr.func.attr == "getenv":
+                                    if tok_expr.args and isinstance(tok_expr.args[0], ast.Constant) and isinstance(tok_expr.args[0].value, str):
+                                        _add(tok_expr.args[0].value)
+            except Exception:
+                # Be robust to AST weirdness
+                pass
+
+    except Exception:
+        # Fallback regex-based detection to add a few more names
+        for pattern in [
+            r'([A-Za-z_]\w*)\s*=\s*["\']([0-9]+:[A-Za-z0-9_-]+)["\']',
+            r'os\.getenv\(\s*["\']([A-Za-z_]\w*)["\']\s*\)',
+        ]:
+            for m in re.finditer(pattern, code):
+                _add(m.group(1))
+
+    # Also regex scan for common variations users might write
     for pattern in [
-        r'([a-zA-Z_]\w*)\s*=\s*["\']([0-9]+:[a-zA-Z0-9_-]+)["\']',
-        r'([a-zA-Z_]\w*)\s*=\s*os\.getenv',
+        r'\bTOKEN\b',
+        r'\bBOT_?TOKEN\b',
+        r'\bTELEGRAM_?TOKEN\b',
+        r'\bAPI_?TOKEN\b',
+        r'\bMY_?BOT_?TOKEN\b',
     ]:
-        m = re.search(pattern, code)
-        if m:
-            token_var = m.group(1)
-            break
-    return framework, token_var
+        for m in re.finditer(pattern, code, flags=re.IGNORECASE):
+            _add(m.group(0))
+
+    # Normalize casing duplicates (keep original plus uppercase variant)
+    uniq = []
+    seen = set()
+    for n in candidates:
+        if n not in seen:
+            uniq.append(n)
+            seen.add(n)
+    candidates = uniq
+    return framework, candidates
 
 
 def guess_requirements(framework: str) -> List[str]:
@@ -191,7 +436,8 @@ def guess_requirements(framework: str) -> List[str]:
         "aiogram_v2": "aiogram<3.0",
         "aiogram_v3": "aiogram>=3.0",
         "pytelegrambotapi": "pyTelegramBotAPI",
-        "python-telegram-bot": "python-telegram-bot",
+        # PTB v21.x required for KeyboardButtonRequestUser/Chat, etc.
+        "python-telegram-bot": "python-telegram-bot>=21.0",
         "pyrogram": "pyrogram",
     }
     return [fmap[framework]] if framework in fmap else []
@@ -563,13 +809,28 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
     if not code:
         return False, None, "no_entry_py"
 
-    framework, token_var = detect_framework(code)
-    reqs = guess_requirements(framework)
+    framework, candidate_names = detect_framework(code)
+    # Prefer full workspace detection; fallback to framework guess
+    try:
+        full_reqs = detect_requirements(workspace)
+    except Exception:
+        full_reqs = []
+    reqs = full_reqs or guess_requirements(framework)
+    # If framework is PTB, ensure we pin to >=21.0
+    if framework == "python-telegram-bot":
+        # Remove older specs and enforce >=21.0
+        reqs = [r for r in reqs if not r.lower().startswith("python-telegram-bot")]
+        reqs.append("python-telegram-bot>=21.0")
 
     temp_dir = None
     client = docker_from_env()
     try:
         temp_dir = tempfile.mkdtemp()
+        # Rewrite code to read token from environment if possible
+        try:
+            code = rewrite_token_in_code(code, env_keys=_ENV_KEYS_DEFAULT, candidate_vars=candidate_names)
+        except Exception:
+            pass
         # Write code and requirements to temp dir
         with open(os.path.join(temp_dir, "bot.py"), "w", encoding="utf-8") as f:
             f.write(code)
@@ -578,16 +839,24 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
 
         # Base image selection based on framework
         base_img = AIOGRAM_V2_IMAGE if framework == "aiogram_v2" else DEFAULT_BASE_IMAGE
+        # Build ENV lines for all candidate names
+        env_lines = [
+            f"ENV {name}={token}"
+            for name in (candidate_names or [])
+            if isinstance(name, str) and name.strip()
+        ]
+        # Also add uppercase variants for env-like names
+        for name in list(candidate_names or []):
+            if name.upper() not in candidate_names:
+                env_lines.append(f"ENV {name.upper()}={token}")
+
         dockerfile = (
             f"FROM {base_img}\n"
             "WORKDIR /app\n"
             "COPY requirements.txt .\n"
             "RUN pip install --no-cache-dir -r requirements.txt\n"
             "COPY bot.py .\n"
-            f"ENV TOKEN={token}\n"
-            f"ENV BOT_TOKEN={token}\n"
-            f"ENV TELEGRAM_TOKEN={token}\n"
-            f"ENV {token_var}={token}\n"
+            + "\n".join(env_lines) + "\n"
             'CMD ["python","-u","bot.py"]\n'
         )
         with open(os.path.join(temp_dir, "Dockerfile"), "w", encoding="utf-8") as f:
