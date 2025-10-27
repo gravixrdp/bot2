@@ -132,13 +132,30 @@ class _TokenRewriter(ast.NodeTransformer):
         return self.generic_visit(node)
 
 
+def _fix_common_syntax_issues(code: str) -> str:
+    """
+    Heuristic fixes for common user-code syntax issues that prevent AST parsing.
+    - f-strings with single-quoted outer string and dict-key access inside braces:
+      f'Something {d['key']}' -> f"Something {d['key']}"
+    Only applies to single-line literals to avoid overreach.
+    """
+    try:
+        # Replace occurrences where an f'...{...['...']...}...' is present on a single line
+        pattern = re.compile(r"""f'([^'\n]*\{[^}\n]*\[[\"'][^]\n]*\][^}\n]*\}[^'\n]*)'""")
+        return pattern.sub(r'f"\1"', code)
+    except Exception:
+        return code
+
+
 def rewrite_token_in_code(code: str, env_keys: Optional[List[str]] = None, candidate_vars: Optional[List[str]] = None) -> str:
     """
     Return a modified code string with token reads redirected to environment.
     Ensures 'import os' exists if needed.
     """
+    # Pre-fix common syntax issues to improve parse success
+    code_prefixed = _fix_common_syntax_issues(code)
     try:
-        tree = ast.parse(code)
+        tree = ast.parse(code_prefixed)
         rewriter = _TokenRewriter(env_keys=env_keys, candidate_vars=candidate_vars)
         new_tree = rewriter.visit(tree)
         ast.fix_missing_locations(new_tree)
@@ -148,14 +165,14 @@ def rewrite_token_in_code(code: str, env_keys: Optional[List[str]] = None, candi
             new_code = "import os\n" + new_code
         return new_code
     except Exception:
-        # Fallback: prepend an env token shim
+        # Fallback: prepend an env token shim and keep the pre-fixed code
         shim = (
             "import os\n"
             "_t = os.getenv('TELEGRAM_TOKEN') or os.getenv('BOT_TOKEN') or os.getenv('TOKEN') or os.getenv('TELEGRAM_BOT_TOKEN') or ''\n"
             "TOKEN = _t or globals().get('TOKEN','')\n"
             "BOT_TOKEN = _t or globals().get('BOT_TOKEN','')\n"
         )
-        return shim + "\n" + code
+        return shim + "\n" + code_prefixed
 
 # Defaults aligned with requested hosting flow
 DEFAULT_BASE_IMAGE = "python:3.11-slim"
@@ -780,6 +797,7 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
     Replace previous multi-file workspace build with single-file, temp-dir based flow
     similar to the provided method: detect framework, guess minimal requirements,
     write bot.py and Dockerfile into a temp dir, build, and run.
+    Additionally detects immediate runtime crashes and surfaces a concise error.
     """
     if not _docker_available():
         log_event("Docker not available. Aborting deployment.")
@@ -826,11 +844,12 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
     client = docker_from_env()
     try:
         temp_dir = tempfile.mkdtemp()
-        # Rewrite code to read token from environment if possible
+        # Rewrite code to read token from environment if possible and fix common syntax issues
         try:
             code = rewrite_token_in_code(code, env_keys=_ENV_KEYS_DEFAULT, candidate_vars=candidate_names)
         except Exception:
-            pass
+            # Still attempt to fix common f-string quote issues even if rewrite fails
+            code = _fix_common_syntax_issues(code)
         # Write code and requirements to temp dir
         with open(os.path.join(temp_dir, "bot.py"), "w", encoding="utf-8") as f:
             f.write(code)
@@ -894,6 +913,32 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
         )
 
         runtime_id = container.id
+        # Short health check: if the container crashes immediately, surface error to user
+        try:
+            time.sleep(2)
+            container.reload()
+            status = getattr(container, "status", "")
+            if status != "running":
+                logs = get_runtime_logs(runtime_id, tail=100) or ""
+                # Extract a concise error line
+                short_err = ""
+                for line in (logs.splitlines() if logs else []):
+                    if "Traceback" in line or "SyntaxError" in line or "Error" in line or "Exception" in line:
+                        short_err = line.strip()
+                        break
+                if not short_err and logs:
+                    short_err = logs.splitlines()[-1].strip()
+                log_event(f"Runtime crashed {runtime_id} for {bot_id}: {short_err or 'see container logs'}")
+                # Stop and remove failed container
+                try:
+                    client.api.remove_container(runtime_id, force=True)
+                except Exception:
+                    pass
+                return False, None, f"runtime_error: {short_err or 'container exited'}"
+        except Exception:
+            # If health check fails, proceed with success but logs will show details
+            pass
+
         log_event(f"Runtime started {runtime_id} for {bot_id} (framework={framework})")
         return True, runtime_id, None
     except docker_errors.BuildError:
