@@ -25,6 +25,30 @@ import asyncio
 router = Router(name="admin")
 
 
+async def _enrich_user_profile(bot, u: dict) -> dict:
+    """
+    Try to fill missing name/username for a user by querying Telegram.
+    Only updates if fields are empty; silent on failures.
+    """
+    uid = int(u.get("id"))
+    name = (u.get("name") or "").strip()
+    uname = (u.get("username") or "").strip()
+    if name and uname:
+        return u
+    try:
+        chat = await bot.get_chat(uid)
+        new_name = name or (chat.full_name or "").strip()
+        new_uname = uname or (chat.username or "").strip()
+        if new_name or new_uname:
+            update_user(uid, name=new_name or u.get("name"), username=new_uname or u.get("username"))
+            # Refresh local copy
+            u = get_user(uid)
+    except Exception:
+        # Ignore if bot cannot access chat info
+        pass
+    return u
+
+
 class AdminReplyStates(StatesGroup):
     waiting_reply = State()
 
@@ -580,9 +604,13 @@ async def admin_users(cb: CallbackQuery):
     if not is_admin(cb.from_user.id):
         return
     db = _read_db()
-    users = db["users"].values()
+    users = list(db["users"].values())
     text = [bold("👥 Users")]
+    enriched = []
     for u in users:
+        u2 = await _enrich_user_profile(cb.message.bot, u)
+        enriched.append(u2)
+    for u in enriched:
         display_name = _format_user_display(u)
         apps_count = len(get_user_bots(u["id"]))
         text.append(
