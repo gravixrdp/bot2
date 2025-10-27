@@ -463,14 +463,16 @@ def guess_requirements(framework: str) -> List[str]:
 def detect_requirements(workspace: str) -> List[str]:
     """
     Detect dependencies by parsing Python files with AST for import statements.
-    Optionally include filtered requirements from requirements.txt that match actual imports.
+    Fall back to regex scanning if AST fails anywhere.
+    Prefer to include user's requirements.txt (sanitized) so mismatches don't break builds.
     """
     import_names = set()
 
-    def collect_imports(py_path: str):
+    def collect_imports_ast(py_path: str):
         try:
             with open(py_path, "r", encoding="utf-8", errors="ignore") as f:
-                tree = ast.parse(f.read(), filename=py_path)
+                src = f.read()
+            tree = ast.parse(src, filename=py_path)
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
                     for alias in node.names:
@@ -483,13 +485,29 @@ def detect_requirements(workspace: str) -> List[str]:
                         if base:
                             import_names.add(base)
         except Exception:
-            # Ignore parse errors in user code
+            # Ignore parse errors in user code; we'll try regex next
+            collect_imports_regex(py_path)
+
+    def collect_imports_regex(py_path: str):
+        try:
+            with open(py_path, "r", encoding="utf-8", errors="ignore") as f:
+                src = f.read()
+            # import x, import x as y, from x import y
+            for m in re.finditer(r"(?m)^[ \t]*import[ \t]+([A-Za-z_][A-Za-z0-9_\.]*)", src):
+                base = m.group(1).split(".")[0]
+                if base:
+                    import_names.add(base)
+            for m in re.finditer(r"(?m)^[ \t]*from[ \t]+([A-Za-z_][A-Za-z0-9_\.]*)[ \t]+import[ \t]+", src):
+                base = m.group(1).split(".")[0]
+                if base:
+                    import_names.add(base)
+        except Exception:
             pass
 
     for root, _, files in os.walk(workspace):
         for f in files:
             if f.endswith(".py"):
-                collect_imports(os.path.join(root, f))
+                collect_imports_ast(os.path.join(root, f))
 
     reqs = set()
     # Map imports to PyPI names
@@ -498,33 +516,31 @@ def detect_requirements(workspace: str) -> List[str]:
         if norm:
             reqs.add(norm)
 
-    # Filter requirements.txt lines to only include things related to detected imports
+    # Prefer to include user's requirements.txt with light validation
     req_path = os.path.join(workspace, "requirements.txt")
     if os.path.exists(req_path):
         try:
-            with open(req_path, "r") as f:
+            with open(req_path, "r", encoding="utf-8", errors="ignore") as f:
                 for line in f:
                     s = line.strip()
                     if not s or s.startswith("#"):
                         continue
-                    # Quick sanity: skip ultra-short names like "a"
-                    if len(s) < 2 and "==" not in s:
-                        continue
-                    # Extract base name left side before any specifier
-                    base = re.split(r"[<>=!~ ]", s)[0].split(".")[0]
-                    # Only include if its base matches an import we saw (or explicit mapping)
-                    base_mapped = _PYPI_MAP.get(base, base)
-                    if (
-                        base in import_names
-                        or (isinstance(base_mapped, str) and base_mapped in reqs)
-                        or s.lower().startswith("pytelegrambotapi")
-                        or s.lower().startswith("python-telegram-bot")
-                    ):  # allow explicit common packages
-                        norm = _normalize_requirement(s)
-                        if norm:
-                            reqs.add(norm)
+                    # Normalize/validate the requirement line; skip obvious placeholders
+                    norm = _normalize_requirement(s)
+                    if norm:
+                        reqs.add(norm)
         except Exception:
             pass
+    else:
+        # If no requirements.txt, ensure common framework packages are included based on imports
+        # telebot -> pyTelegramBotAPI, telegram -> python-telegram-bot, etc. (handled by _normalize_requirement above)
+        pass
+
+    # Ensure explicit mappings for detected frameworks are present, even if not imported at top-level
+    if "telebot" in import_names:
+        reqs.add("pyTelegramBotAPI")
+    if "telegram" in import_names:
+        reqs.add("python-telegram-bot>=21.0")
 
     return sorted(reqs)
 
