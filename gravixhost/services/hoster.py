@@ -584,6 +584,9 @@ def _try_run():
 
 try:
     _try_run()
+    # If the user script returns immediately, provide a clear message.
+    print('gravix_runner: user script finished (no long-running loop)')
+    sys.exit(0)
 except ModuleNotFoundError as e:
     missing = getattr(e, 'name', None)
     if not missing and 'No module named' in str(e):
@@ -606,6 +609,8 @@ except ModuleNotFoundError as e:
         try:
             subprocess.check_call([sys.executable, '-m', 'pip', 'install', pkg])
             _try_run()
+            print('gravix_runner: user script finished (no long-running loop)')
+            sys.exit(0)
         except Exception:
             import traceback; traceback.print_exc(); sys.exit(1)
     else:
@@ -761,7 +766,9 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
         image_tag = f"hostbot_{user_id}_{bot_id}_{int(time.time())}".lower().replace(" ", "_").replace("-", "_")
         container_name = f"hostbot_{user_id}_{bot_id}_{int(time.time())}".lower().replace(" ", "_").replace("-", "_")
 
-        # Build image (explicitly_event(f"Building image {image_tag} for {bot_id}")
+        # Build image
+        log_event(f"Building image {image_tag} for {bot_id}")
+        client.images.build(path=temp_dir, tag=image_tag, rm=True, timeout=BUILD_TIMEOUT_SECS, dockerfile="Dockerfile")ild image (explicitly_event(f"Building image {image_tag} for {bot_id}")
         client.images.build(path=temp_dir, tag=image_tag, rm=True, timeout=BUILD_TIMEOUT_SECS)
 
         # Ensure network exists or use default bridge
@@ -804,36 +811,22 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
             container.reload()
             status = getattr(container, "status", "")
             if status != "running":
-                # Read exit code if available to distinguish normal exit vs error
-                exit_code = None
-                try:
-                    container.reload()
-                    exit_code = container.attrs.get("State", {}).get("ExitCode")
-                except Exception:
-                    exit_code = None
-
-                logs = get_runtime_logs(runtime_id, tail=500) or ""
+                logs = get_runtime_logs(runtime_id, tail=100) or ""
                 # Extract a concise error line
                 short_err = ""
                 for line in (logs.splitlines() if logs else []):
-                    if any(k in line for k in ("Traceback", "SyntaxError", "Error", "Exception", "Unauthorized", "InvalidToken")):
+                    if "Traceback" in line or "SyntaxError" in line or "Error" in line or "Exception" in line:
                         short_err = line.strip()
                         break
                 if not short_err and logs:
-                    # Use last non-empty line
-                    for line in reversed(logs.splitlines()):
-                        if line.strip():
-                            short_err = line.strip()
-                            break
-                # Choose message based on exit code
-                msg = short_err or ("container exited (code %s)" % (exit_code if exit_code is not None else "?"))
-                log_event(f"Runtime crashed {runtime_id} for {bot_id}: {msg}")
-                # Stop and remove failed container (no restart policy)
+                    short_err = logs.splitlines()[-1].strip()
+                log_event(f"Runtime crashed {runtime_id} for {bot_id}: {short_err or 'see container logs'}")
+                # Stop and remove failed container
                 try:
                     client.api.remove_container(runtime_id, force=True)
                 except Exception:
                     pass
-                return False, None, f"runtime_error: {msg}"
+                return False, None, f"runtime_error: {short_err or 'container exited'}"
         except Exception:
             # If health check fails, proceed with success but logs will show details
             pass
