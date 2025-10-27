@@ -187,11 +187,18 @@ def get_user(user_id: int) -> Dict[str, Any]:
         user = {
             "id": user_id,
             "name": "",
+            "username": "",
             "is_premium": False,
             "premium_expiry": None,
         }
         users[str(user_id)] = user
         _write_db(db)
+    else:
+        # Ensure keys exist
+        if "username" not in user:
+            user["username"] = ""
+            users[str(user_id)] = user
+            _write_db(db)
     return user
 
 
@@ -199,9 +206,8 @@ def update_user(user_id: int, **kwargs):
     db = _read_db()
     users = db["users"]
     user = users.get(str(user_id)) or get_user(user_id)
-    user.update(kwargs)
-    users[str(user_id)] = user
-    _write_db(db)
+    # Only apply non-None values to avoid overwriting with None
+    for)
 
 
 def set_premium(user_id: int, days: int):
