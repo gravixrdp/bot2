@@ -463,14 +463,16 @@ def guess_requirements(framework: str) -> List[str]:
 def detect_requirements(workspace: str) -> List[str]:
     """
     Detect dependencies by parsing Python files with AST for import statements.
-    Optionally include filtered requirements from requirements.txt that match actual imports.
+    Fall back to regex scanning if AST fails anywhere.
+    Prefer to include user's requirements.txt (sanitized) so mismatches don't break builds.
     """
     import_names = set()
 
-    def collect_imports(py_path: str):
+    def collect_imports_ast(py_path: str):
         try:
             with open(py_path, "r", encoding="utf-8", errors="ignore") as f:
-                tree = ast.parse(f.read(), filename=py_path)
+                src = f.read()
+            tree = ast.parse(src, filename=py_path)
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
                     for alias in node.names:
@@ -483,13 +485,29 @@ def detect_requirements(workspace: str) -> List[str]:
                         if base:
                             import_names.add(base)
         except Exception:
-            # Ignore parse errors in user code
+            # Ignore parse errors in user code; we'll try regex next
+            collect_imports_regex(py_path)
+
+    def collect_imports_regex(py_path: str):
+        try:
+            with open(py_path, "r", encoding="utf-8", errors="ignore") as f:
+                src = f.read()
+            # import x, import x as y, from x import y
+            for m in re.finditer(r"(?m)^[ \t]*import[ \t]+([A-Za-z_][A-Za-z0-9_\.]*)", src):
+                base = m.group(1).split(".")[0]
+                if base:
+                    import_names.add(base)
+            for m in re.finditer(r"(?m)^[ \t]*from[ \t]+([A-Za-z_][A-Za-z0-9_\.]*)[ \t]+import[ \t]+", src):
+                base = m.group(1).split(".")[0]
+                if base:
+                    import_names.add(base)
+        except Exception:
             pass
 
     for root, _, files in os.walk(workspace):
         for f in files:
             if f.endswith(".py"):
-                collect_imports(os.path.join(root, f))
+                collect_imports_ast(os.path.join(root, f))
 
     reqs = set()
     # Map imports to PyPI names
@@ -498,46 +516,47 @@ def detect_requirements(workspace: str) -> List[str]:
         if norm:
             reqs.add(norm)
 
-    # Filter requirements.txt lines to only include things related to detected imports
+    # Prefer to include user's requirements.txt with light validation
     req_path = os.path.join(workspace, "requirements.txt")
     if os.path.exists(req_path):
         try:
-            with open(req_path, "r") as f:
+            with open(req_path, "r", encoding="utf-8", errors="ignore") as f:
                 for line in f:
                     s = line.strip()
                     if not s or s.startswith("#"):
                         continue
-                    # Quick sanity: skip ultra-short names like "a"
-                    if len(s) < 2 and "==" not in s:
-                        continue
-                    # Extract base name left side before any specifier
-                    base = re.split(r"[<>=!~ ]", s)[0].split(".")[0]
-                    # Only include if its base matches an import we saw (or explicit mapping)
-                    base_mapped = _PYPI_MAP.get(base, base)
-                    if (
-                        base in import_names
-                        or (isinstance(base_mapped, str) and base_mapped in reqs)
-                        or s.lower().startswith("pytelegrambotapi")
-                        or s.lower().startswith("python-telegram-bot")
-                    ):  # allow explicit common packages
-                        norm = _normalize_requirement(s)
-                        if norm:
-                            reqs.add(norm)
+                    # Normalize/validate the requirement line; skip obvious placeholders
+                    norm = _normalize_requirement(s)
+                    if norm:
+                        reqs.add(norm)
         except Exception:
             pass
+    else:
+        # If no requirements.txt, ensure common framework packages are included based on imports
+        # telebot -> pyTelegramBotAPI, telegram -> python-telegram-bot, etc. (handled by _normalize_requirement above)
+        pass
+
+    # Ensure explicit mappings for detected frameworks are present, even if not imported at top-level
+    if "telebot" in import_names:
+        reqs.add("pyTelegramBotAPI")
+    if "telegram" in import_names:
+        reqs.add("python-telegram-bot>=21.0")
 
     return sorted(reqs)
 
 
 def write_runner_and_dockerfile(workspace: str, entry: Optional[str] = None, requirements: Optional[List[str]] = None):
-    # Runner executes the detected entry file; token is passed via TELEGRAM_TOKEN env var
+    """
+    Write a stable Python runner and a valid Dockerfile with proper newlines.
+    This fixes the earlier issue where literal '\n' was written, breaking Dockerfile parsing.
+    """
     entry_file = entry or "bot.py"
 
     # Python runner: injects token into globals so common patterns like BOT_TOKEN/TOKEN work
     runner_py = os.path.join(workspace, "gravix_runner.py")
     runner_code = f"""import os, runpy, sys, subprocess, threading, time, re
 
-token = os.getenv('TELEGRAM_TOKEN') or os.getenv('BOT_TOKEN') or ''
+token = os.getenv('TELEGRAM_TOKEN') or os.getenv('BOT_TOKEN') or os.getenv('TOKEN') or os.getenv('TELEGRAM_BOT_TOKEN') or ''
 # Expose in env for libraries that read from environment
 os.environ['BOT_TOKEN'] = token
 os.environ['TELEGRAM_TOKEN'] = token
@@ -598,12 +617,12 @@ except Exception:
     traceback.print_exc()
     sys.exit(1)
 """
-    with open(runner_py, "w") as f:
+    with open(runner_py, "w", encoding="utf-8") as f:
         f.write(runner_code)
 
-    # Shell runner (not used by CMD anymore; kept for compatibility)
+    # Shell runner (compatibility)
     runner_sh = os.path.join(workspace, "gravix_runner.sh")
-    with open(runner_sh, "w") as f:
+    with open(runner_sh, "w", encoding="utf-8") as f:
         f.write("#!/usr/bin/env bash\n")
         f.write("set -e\n")
         f.write('export BOT_TOKEN="${TELEGRAM_TOKEN}"\n')
@@ -614,13 +633,13 @@ except Exception:
     req_auto_path = None
     if requirements:
         req_auto_path = os.path.join(workspace, "requirements.autodetected.txt")
-        with open(req_auto_path, "w") as rf:
+        with open(req_auto_path, "w", encoding="utf-8") as rf:
             rf.write("\n".join(requirements))
         # Also ensure a requirements.txt exists for user code
         req_txt_path = os.path.join(workspace, "requirements.txt")
         if not os.path.exists(req_txt_path):
             try:
-                with open(req_txt_path, "w") as rtf:
+                with open(req_txt_path, "w", encoding="utf-8") as rtf:
                     rtf.write("\n".join(requirements))
             except Exception:
                 pass
@@ -632,8 +651,9 @@ except Exception:
     except Exception:
         run_mode = "runner"
 
+    # Write a valid Dockerfile (newlines, no escaped literal '\n')
     dockerfile = os.path.join(workspace, "Dockerfile")
-    with open(dockerfile, "w") as f:
+    with open(dockerfile, "w", encoding="utf-8") as f:
         f.write("FROM python:3.11-slim\n")
         f.write("WORKDIR /app\n")
         f.write("COPY . /app\n")
@@ -794,10 +814,12 @@ def _run_locally(workspace: str, entry: Optional[str], token: str) -> Tuple[bool
 
 def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: Optional[str] = None) -> Tuple[bool, Optional[str], Optional[str]]:
     """
-    Replace previous multi-file workspace build with single-file, temp-dir based flow
-    similar to the provided method: detect framework, guess minimal requirements,
-    write bot.py and Dockerfile into a temp dir, build, and run.
-    Additionally detects immediate runtime crashes and surfaces a concise error.
+    Hardened build+run:
+    - Detect framework and imports
+    - Rewrite token reads to environment
+    - Always run via a stable runner that injects token into globals (BOT_TOKEN/TOKEN/TELEGRAM_TOKEN)
+    - Include user's requirements.txt (sanitized) plus detected/guessed requirements
+    - Pass TELEGRAM_TOKEN at run time to avoid relying on Dockerfile ENV
     """
     if not _docker_available():
         log_event("Docker not available. Aborting deployment.")
@@ -834,9 +856,8 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
     except Exception:
         full_reqs = []
     reqs = full_reqs or guess_requirements(framework)
-    # If framework is PTB, ensure we pin to >=21.0
-    if framework == "python-telegram-bot":
-        # Remove older specs and enforce >=21.0
+    # Ensure PTB is pinned to >=21.0 if detected
+    if any(r.lower().startswith("python-telegram-bot") for r in reqs):
         reqs = [r for r in reqs if not r.lower().startswith("python-telegram-bot")]
         reqs.append("python-telegram-bot>=21.0")
 
@@ -844,42 +865,20 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
     client = docker_from_env()
     try:
         temp_dir = tempfile.mkdtemp()
-        # Rewrite code to read token from environment if possible and fix common syntax issues
+        # Rewrite code to read token from environment where possible and fix common syntax issues
         try:
             code = rewrite_token_in_code(code, env_keys=_ENV_KEYS_DEFAULT, candidate_vars=candidate_names)
         except Exception:
-            # Still attempt to fix common f-string quote issues even if rewrite fails
             code = _fix_common_syntax_issues(code)
+
         # Write code and requirements to temp dir
         with open(os.path.join(temp_dir, "bot.py"), "w", encoding="utf-8") as f:
             f.write(code)
         with open(os.path.join(temp_dir, "requirements.txt"), "w", encoding="utf-8") as f:
             f.write("\n".join(reqs) if reqs else "")
 
-        # Base image selection based on framework
-        base_img = AIOGRAM_V2_IMAGE if framework == "aiogram_v2" else DEFAULT_BASE_IMAGE
-        # Build ENV lines for all candidate names
-        env_lines = [
-            f"ENV {name}={token}"
-            for name in (candidate_names or [])
-            if isinstance(name, str) and name.strip()
-        ]
-        # Also add uppercase variants for env-like names
-        for name in list(candidate_names or []):
-            if name.upper() not in candidate_names:
-                env_lines.append(f"ENV {name.upper()}={token}")
-
-        dockerfile = (
-            f"FROM {base_img}\n"
-            "WORKDIR /app\n"
-            "COPY requirements.txt .\n"
-            "RUN pip install --no-cache-dir -r requirements.txt\n"
-            "COPY bot.py .\n"
-            + "\n".join(env_lines) + "\n"
-            'CMD ["python","-u","bot.py"]\n'
-        )
-        with open(os.path.join(temp_dir, "Dockerfile"), "w", encoding="utf-8") as f:
-            f.write(dockerfile)
+        # Write runner and Dockerfile (stable path)
+        write_runner_and_dockerfile(temp_dir, entry="bot.py", requirements=reqs)
 
         image_tag = f"hostbot_{user_id}_{bot_id}_{int(time.time())}".lower().replace(" ", "_").replace("-", "_")
         container_name = f"hostbot_{user_id}_{bot_id}_{int(time.time())}".lower().replace(" ", "_").replace("-", "_")
@@ -900,11 +899,19 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
                 log_event(f"Could not verify/create network '{network}', proceeding with defaults.")
                 network = None
 
-        # Run container with simple resource limits (same-to-same style)
+        # Run container with TELEGRAM_TOKEN env and resource limits
         container = client.containers.run(
             image_tag,
             name=container_name,
             detach=True,
+            environment={
+                # Primary token env
+                "TELEGRAM_TOKEN": token,
+                # Common aliases to maximize compatibility
+                "BOT_TOKEN": token,
+                "TOKEN": token,
+                "TELEGRAM_BOT_TOKEN": token,
+            },
             cpu_quota=DEFAULT_CPU_QUOTA,
             mem_limit=DEFAULT_MEM_LIMIT,
             pids_limit=DEFAULT_PIDS_LIMIT,

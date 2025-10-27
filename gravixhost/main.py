@@ -692,6 +692,14 @@ async def handle_token(message: Message, state: FSMContext):
                 bold("⚠️ Entry file not found") + "\n"
                 + "Please upload a .py file (e.g., bot.py/app.py/main.py) or a zip with your code."
             )
+        elif isinstance(err, str) and err.startswith("runtime_error:"):
+            # Surface concise runtime error line from container logs to help users fix quickly
+            detail = err.split(":", 1)[1].strip()
+            base_msg = (
+                bold("⚠️ Runtime error") + "\n"
+                + (detail + "\n" if detail else "")
+                + "Try running locally: " + code(f"python {pending.entry_name or 'your_file.py'}")
+            )
         else:
             base_msg = (
                 bold("⚠️ Setup failed") + "\n"
