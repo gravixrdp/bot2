@@ -818,7 +818,9 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
     reqs = full_reqs or guess_requirements(framework)
     # If framework is PTB, ensure we pin to >=21.0
     if framework == "python-telegram-bot":
-        # Removek)
+        # Remove older specs and enforce >=21.0
+        reqs = [r for r in reqs if not r.lower().startswith("python-telegram-bot")]
+        reqs.append("python-telegram-bot>=21.0")
 
     temp_dir = None
     client = docker_from_env()
