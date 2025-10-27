@@ -546,14 +546,17 @@ def detect_requirements(workspace: str) -> List[str]:
 
 
 def write_runner_and_dockerfile(workspace: str, entry: Optional[str] = None, requirements: Optional[List[str]] = None):
-    # Runner executes the detected entry file; token is passed via TELEGRAM_TOKEN env var
+    """
+    Write a stable Python runner and a valid Dockerfile with proper newlines.
+    This fixes the earlier issue where literal '\n' was written, breaking Dockerfile parsing.
+    """
     entry_file = entry or "bot.py"
 
     # Python runner: injects token into globals so common patterns like BOT_TOKEN/TOKEN work
     runner_py = os.path.join(workspace, "gravix_runner.py")
     runner_code = f"""import os, runpy, sys, subprocess, threading, time, re
 
-token = os.getenv('TELEGRAM_TOKEN') or os.getenv('BOT_TOKEN') or ''
+token = os.getenv('TELEGRAM_TOKEN') or os.getenv('BOT_TOKEN') or os.getenv('TOKEN') or os.getenv('TELEGRAM_BOT_TOKEN') or ''
 # Expose in env for libraries that read from environment
 os.environ['BOT_TOKEN'] = token
 os.environ['TELEGRAM_TOKEN'] = token
@@ -614,12 +617,12 @@ except Exception:
     traceback.print_exc()
     sys.exit(1)
 """
-    with open(runner_py, "w") as f:
+    with open(runner_py, "w", encoding="utf-8") as f:
         f.write(runner_code)
 
-    # Shell runner (not used by CMD anymore; kept for compatibility)
+    # Shell runner (compatibility)
     runner_sh = os.path.join(workspace, "gravix_runner.sh")
-    with open(runner_sh, "w") as f:
+    with open(runner_sh, "w", encoding="utf-8") as f:
         f.write("#!/usr/bin/env bash\n")
         f.write("set -e\n")
         f.write('export BOT_TOKEN="${TELEGRAM_TOKEN}"\n')
@@ -630,13 +633,13 @@ except Exception:
     req_auto_path = None
     if requirements:
         req_auto_path = os.path.join(workspace, "requirements.autodetected.txt")
-        with open(req_auto_path, "w") as rf:
+        with open(req_auto_path, "w", encoding="utf-8") as rf:
             rf.write("\n".join(requirements))
         # Also ensure a requirements.txt exists for user code
         req_txt_path = os.path.join(workspace, "requirements.txt")
         if not os.path.exists(req_txt_path):
             try:
-                with open(req_txt_path, "w") as rtf:
+                with open(req_txt_path, "w", encoding="utf-8") as rtf:
                     rtf.write("\n".join(requirements))
             except Exception:
                 pass
@@ -648,8 +651,9 @@ except Exception:
     except Exception:
         run_mode = "runner"
 
+    # Write a valid Dockerfile (newlines, no escaped literal '\n')
     dockerfile = os.path.join(workspace, "Dockerfile")
-    with open(dockerfile, "w") as f:
+    with open(dockerfile, "w", encoding="utf-8") as f:
         f.write("FROM python:3.11-slim\n")
         f.write("WORKDIR /app\n")
         f.write("COPY . /app\n")
