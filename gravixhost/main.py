@@ -1146,49 +1146,62 @@ async def cb_main_menu(cb: CallbackQuery):
 # User inline actions: stop, restart, remove, logs
 @router.callback_query(F.data.startswith("user_stop:"))
 async def cb_user_stop(cb: CallbackQuery):
+    # Acknowledge callback immediately to avoid "query is too old" errors
+    try:
+        await cb.answer()
+    except Exception:
+        pass
+
     bot_id = cb.data.split(":", 1)[1]
     from .storage import get_bot
     from .services.hoster import stop_runtime
     b = get_bot(bot_id)
     if not b or b["owner_id"] != cb.from_user.id:
         await cb.message.answer("Bot not found or not yours.", reply_markup=user_manage_menu(), parse_mode=ParseMode.HTML)
-        await cb.answer()
         return
     rid = b.get("runtime_id")
     if rid:
         stop_runtime(rid)
     mark_stopped(bot_id)
     await cb.message.answer(f"🛑 Stopped {code(bot_id)}", reply_markup=user_manage_menu(), parse_mode=ParseMode.HTML)
-    await cb.answer()
 
 
 @router.callback_query(F.data.startswith("user_restart:"))
 async def cb_user_restart(cb: CallbackQuery):
+    # Acknowledge callback immediately to avoid "query is too old" errors
+    try:
+        await cb.answer()
+    except Exception:
+        pass
+
     bot_id = cb.data.split(":", 1)[1]
     from .storage import get_bot
     from .services.hoster import restart_runtime
     b = get_bot(bot_id)
     if not b or b["owner_id"] != cb.from_user.id:
         await cb.message.answer("Bot not found or not yours.", reply_markup=user_manage_menu(), parse_mode=ParseMode.HTML)
-        await cb.answer()
         return
     rid = b.get("runtime_id")
     if rid and restart_runtime(rid):
         await cb.message.answer(f"♻️ Restarted {code(bot_id)}", reply_markup=user_manage_menu(), parse_mode=ParseMode.HTML)
     else:
         await cb.message.answer("Failed to restart.", reply_markup=user_manage_menu(), parse_mode=ParseMode.HTML)
-    await cb.answer()
 
 
 @router.callback_query(F.data.startswith("user_remove:"))
 async def cb_user_remove(cb: CallbackQuery):
+    # Acknowledge callback immediately to avoid "query is too old" errors
+    try:
+        await cb.answer()
+    except Exception:
+        pass
+
     bot_id = cb.data.split(":", 1)[1]
     from .storage import get_bot, delete_bot
     from .services.hoster import stop_runtime, remove_workspace, remove_image
     b = get_bot(bot_id)
     if not b or b["owner_id"] != cb.from_user.id:
         await cb.message.answer("Bot not found or not yours.", reply_markup=user_manage_menu(), parse_mode=ParseMode.HTML)
-        await cb.answer()
         return
     rid = b.get("runtime_id")
     if rid:
@@ -1199,7 +1212,6 @@ async def cb_user_remove(cb: CallbackQuery):
         remove_workspace(b["path"])
     delete_bot(bot_id)
     await cb.message.answer(f"🗑️ Removed {code(bot_id)}", reply_markup=user_manage_menu(), parse_mode=ParseMode.HTML)
-    await cb.answer()
 
 
 @router.callback_query(F.data.startswith("user_logs:"))
