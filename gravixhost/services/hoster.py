@@ -460,6 +460,126 @@ def guess_requirements(framework: str) -> List[str]:
     return [fmap[framework]] if framework in fmap else []
 
 
+# Simplified analyzer to mirror the provided script's behavior
+def analyze_code(code: str) -> tuple[str, str, List[str]]:
+    """
+    Return (framework, token_var, reqs_guess) using a lightweight approach
+    like the reference script.
+    """
+    # Framework detection (light)
+    framework = "unknown"
+    try:
+        tree = ast.parse(code)
+        imports = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    imports.add(alias.name.split('.')[0])
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imports.add(node.module.split('.')[0])
+        if 'aiogram' in imports:
+            framework = 'aiogram_v2' if 'executor.start_polling' in code else 'aiogram_v3'
+        elif 'telebot' in imports:
+            framework = 'pytelegrambotapi'
+        elif 'telegram' in imports:
+            framework = 'python-telegram-bot'
+        elif 'pyrogram' in imports:
+            framework = 'pyrogram'
+    except Exception:
+        pass
+
+    # Token variable guess
+    token_var = "TOKEN"
+    for pattern in [
+        r'([a-zA-Z_]\w*)\s*=\s*["\']([0-9]+:[a-zA-Z0-9_-]+)["\']',
+        r'([a-zA-Z_]\w*)\s*=\s*os\.getenv'
+    ]:
+        m = re.search(pattern, code)
+        if m:
+            token_var = m.group(1)
+            break
+
+    reqs = guess_requirements(framework)
+    return framework, token_var, reqs
+
+
+def build_and_run_from_code(
+    uid: int,
+    name: str,
+    code: str,
+    reqs: List[str],
+    framework: str,
+    token_var: str,
+    token: str,
+) -> Tuple[bool, Optional[str], Optional[str]]:
+    """
+    Build and run a single-file bot exactly like the reference script approach.
+    Returns (ok, runtime_id, error). Uses Docker isolation and existing runtime settings.
+    """
+    temp_dir = None
+    client = docker_from_env()
+    try:
+        temp_dir = tempfile.mkdtemp()
+        # Write code and requirements
+        with open(os.path.join(temp_dir, "bot.py"), "w", encoding="utf-8") as f:
+            f.write(code)
+        with open(os.path.join(temp_dir, "requirements.txt"), "w", encoding="utf-8") as f:
+            f.write("\n".join(reqs) if reqs else "")
+
+        # Choose base image similar to the sample
+        base_img = AIOGRAM_V2_IMAGE if framework == 'aiogram_v2' else DEFAULT_BASE_IMAGE
+        dockerfile = (
+            f"FROM {base_img}\n"
+            "WORKDIR /app\n"
+            "COPY requirements.txt .\n"
+            "RUN pip install --no-cache-dir -r requirements.txt\n"
+            "COPY bot.py .\n"
+            f"ENV TOKEN={token}\n"
+            f"ENV BOT_TOKEN={token}\n"
+            f"ENV {token_var}={token}\n"
+            "CMD [\"python\",\"-u\",\"bot.py\"]\n"
+        )
+        with open(os.path.join(temp_dir, "Dockerfile"), "w", encoding="utf-8") as f:
+            f.write(dockerfile)
+
+        image_tag = f"hostbot_{uid}_{name}_{int(time.time())}".lower().replace(" ", "_").replace("-", "_")
+        container_name = f"hostbot_{uid}_{name}_{int(time.time())}".lower().replace(" ", "_").replace("-", "_")
+
+        # Build image
+        client.images.build(path=temp_dir, tag=image_tag, rm=True)
+
+        # Select network (prefer configured runtime network; otherwise default bridge)
+        network = RUNTIME_NETWORK
+        if network:
+            try:
+                nets = client.networks.list(names=[network])
+                if not nets:
+                    client.networks.create(name=network)
+                    log_event(f"Created missing Docker network: {network}")
+            except Exception:
+                log_event(f"Could not verify/create network '{network}', proceeding with defaults.")
+                network = None
+
+        container = client.containers.run(
+            image_tag,
+            name=container_name,
+            detach=True,
+            cpu_quota=DEFAULT_CPU_QUOTA,
+            mem_limit=DEFAULT_MEM_LIMIT,
+            pids_limit=DEFAULT_PIDS_LIMIT,
+            network=network if network else None,
+            restart_policy={"Name": "unless-stopped"},
+        )
+        rid = container.id
+        if temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        return True, rid, None
+    except Exception as e:
+        if temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        return False, None, f"{str(e)[:200]}"
+
+
 def detect_requirements(workspace: str) -> List[str]:
     """
     Detect dependencies by parsing Python files with AST for import statements.

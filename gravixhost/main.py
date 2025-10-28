@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 from dataclasses import dataclass
 from typing import Optional, Dict, List
 
@@ -733,11 +734,41 @@ async def handle_upload(message: Message, state: FSMContext):
     workspace = save_upload(user_id, bot_rec["id"], filename, data_bytes)
     update_bot(bot_rec["id"], path=workspace)
 
-    # Detect entry file
+    # If it's a single .py file, mirror the provided script's flow: analyze -> ask TOKEN -> ask NAME
+    if filename.endswith(".py"):
+        try:
+            code_text = data_bytes.decode("utf-8", errors="ignore")
+        except Exception:
+            code_text = ""
+        from .services.hoster import analyze_code
+        framework, token_var, reqs_guess = analyze_code(code_text)
+        await state.update_data(
+            pending=PendingHost(
+                workspace=workspace,
+                entry_name=os.path.basename(filename),
+                bot_record_id=bot_rec["id"],
+                bot_name=bot_rec["name"],
+            ).__dict__,
+            code_pipeline={
+                "code": code_text,
+                "framework": framework,
+                "token_var": token_var,
+                "reqs": reqs_guess,
+            },
+        )
+        await message.answer(
+            f"✅ Analyzed your code.\n\nFramework: {framework}\nToken var: {token_var}\n\nPlease send your bot TOKEN (from @BotFather).",
+            reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
+            parse_mode=ParseMode.HTML,
+        )
+        await state.set_state(HostStates.waiting_token)
+        return
+
+    # Detect entry file for archives/zip or multi-file
     entry_name = _detect_entry(workspace, filename)
     await state.update_data(pending=PendingHost(workspace=workspace, entry_name=entry_name, bot_record_id=bot_rec["id"], bot_name=bot_rec["name"]).__dict__)
 
-    # Ask for app name first
+    # Ask for app name first (archive/multi-file path)
     await message.answer(
         "📝 Please send a name for your app (e.g., MyShopBot).",
         reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
@@ -758,9 +789,9 @@ async def upload_error(message: Message):
 @router.message(HostStates.waiting_name, F.text)
 async def handle_app_name(message: Message, state: FSMContext):
     name = (message.text or "").strip()
-    if not name:
+    if not name or not re.match(r"^[A-Za-z0-9_-]+$", name):
         await message.answer(
-            "⚠️ Please send a non-empty name for your app.",
+            "⚠️ Please send a valid name (letters, numbers, _ and -).",
             reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
             parse_mode=ParseMode.HTML,
         )
@@ -773,7 +804,50 @@ async def handle_app_name(message: Message, state: FSMContext):
     update_bot(pending.bot_record_id, name=name)
     await state.update_data(pending=pending.__dict__)
 
-    # Continue to token
+    # If single-file pipeline present, build now using that flow
+    if "code_pipeline" in data:
+        cp = data["code_pipeline"]
+        code_text = cp.get("code") or ""
+        framework = cp.get("framework") or "unknown"
+        token_var = cp.get("token_var") or "TOKEN"
+        reqs = cp.get("reqs") or []
+        token = cp.get("token") or ""
+
+        # Enforce plan constraints
+        if not can_host_more(message.from_user.id):
+            await message.answer(
+                f"{bold('⚠️ Limit reached')}\nFree users can only host 1 bot for 1 hour.\nStop or wait for it to expire, or upgrade to premium 💎.",
+                reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
+                parse_mode=ParseMode.HTML,
+            )
+            # Cleanup workspace
+            if pending.workspace:
+                remove_workspace(pending.workspace)
+            await state.clear()
+            return
+
+        await message.answer("🔄 Deploying... Please wait 2-5 minutes", parse_mode=ParseMode.HTML)
+        from .services.hoster import build_and_run_from_code
+        ok, runtime_id, err = build_and_run_from_code(
+            message.from_user.id, name, code_text, reqs, framework, token_var, token
+        )
+        if not ok:
+            await message.answer(f"❌ Failed!\n\n{err or 'Unknown error'}", parse_mode=ParseMode.HTML)
+            await state.clear()
+            return
+
+        # Success: record start
+        user = get_user(message.from_user.id)
+        plan = "premium" if user.get("is_premium") else "free"
+        mark_started(pending.bot_record_id, plan, runtime_id or "")
+        await message.answer(
+            f"✅ Success!\n\nBot: {name}\nFramework: {framework}\nStatus: Running\n\nUse /apps to view",
+            parse_mode=ParseMode.HTML,
+        )
+        await state.clear()
+        return
+
+    # Otherwise continue legacy flow: ask for token next
     await message.answer(
         "🔐 Please send your bot token (e.g. " + code("123456:ABC-DEF...") + ")",
         reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
@@ -804,6 +878,22 @@ async def handle_token(message: Message, state: FSMContext):
         )
         return
 
+    data = await state.get_data()
+    # If we are in single-file (.py) pipeline, ask for name next (mirror reference script)
+    if "code_pipeline" in data:
+        # Stash token in pipeline
+        cp = dict(data["code_pipeline"])
+        cp["token"] = token
+        await state.update_data(code_pipeline=cp)
+        await message.answer(
+            "📝 Enter app name (letters, numbers, _ and -):",
+            reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
+            parse_mode=ParseMode.HTML,
+        )
+        await state.set_state(HostStates.waiting_name)
+        return
+
+    # Legacy/archive path continues to build now
     user = get_user(message.from_user.id)
     data = await state.get_data()
     pending = PendingHost(**data.get("pending"))
