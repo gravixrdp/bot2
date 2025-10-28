@@ -872,6 +872,20 @@ def detect_requirements(workspace: str) -> List[str]:
     for r in reqs_from_imports:
         add_spec(r)
 
+    # Consolidate common duplicates/pins
+    def _consolidate(pack: str, pinned: str):
+        pack_lower = pack.lower()
+        pinned_lower = pinned.lower()
+        if any(x.startswith(pack_lower) for x in list(seen_lower)):
+            # Remove all variants of 'pack' and add pinned
+            nonlocal final, seen_lower
+            final = [x for x in final if not x.lower().startswith(pack_lower)]
+            seen_lower = {x.lower() for x in final}
+            add_spec(pinned)
+
+    _consolidate("python-telegram-bot", "python-telegram-bot>=21.0")
+    _consolidate("aiogram", "aiogram>=3.0")
+
     # Sort for stability
     return sorted(final)
 
@@ -1143,10 +1157,14 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
     except Exception:
         full_reqs = []
     reqs = full_reqs or guess_requirements(framework)
-    # Ensure PTB is pinned to >=21.0 if detected
+    # Ensure PTB is pinned to >=21.0 if detected and deduplicate
     if any(r.lower().startswith("python-telegram-bot") for r in reqs):
         reqs = [r for r in reqs if not r.lower().startswith("python-telegram-bot")]
         reqs.append("python-telegram-bot>=21.0")
+    # Ensure aiogram is consolidated to >=3.0 (avoid mixed specs)
+    if any(r.lower().startswith("aiogram") for r in reqs):
+        reqs = [r for r in reqs if not r.lower().startswith("aiogram")]
+        reqs.append("aiogram>=3.0")
 
     temp_dir = None
     client = docker_from_env()
@@ -1226,12 +1244,13 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
                 lines = logs.splitlines() if logs else []
                 # Filter out runner noise lines
                 filtered = [l for l in lines if not l.startswith("gravix_runner:")]
-                # Extract a concise error line
-                short_err = ""
-                for line in filtered:
-                    if any(k in line for k in ("Traceback", "SyntaxError", "Error", "Exception", "Unauthorized", "InvalidToken", "ValueError", "RuntimeError")):
-                        short_err = line.strip()
-                        break
+                # Extract a concise error snippet (up to 8 lines)
+                snippet_lines = []
+                if filtered:
+                    # Try to capture traceback block
+                    start_idx = None
+                    for i, line in enumerate(filtered):
+                        if "Traceback (most recent call last):" in        break
                 if not short_err and filtered:
                     # Use last non-empty line (not from runner)
                     for line in reversed(filtered):
