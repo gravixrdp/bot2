@@ -740,8 +740,16 @@ async def handle_upload(message: Message, state: FSMContext):
             code_text = data_bytes.decode("utf-8", errors="ignore")
         except Exception:
             code_text = ""
-        from .services.hoster import analyze_code
+        from .services.hoster import analyze_code, detect_requirements
         framework, token_var, reqs_guess = analyze_code(code_text)
+
+        # Auto-detect requirements from the uploaded file/workspace; fall back to framework guess
+        try:
+            autodetected_reqs = detect_requirements(workspace)
+        except Exception:
+            autodetected_reqs = []
+        final_reqs = autodetected_reqs or (reqs_guess or [])
+
         await state.update_data(
             pending=PendingHost(
                 workspace=workspace,
@@ -753,11 +761,14 @@ async def handle_upload(message: Message, state: FSMContext):
                 "code": code_text,
                 "framework": framework,
                 "token_var": token_var,
-                "reqs": reqs_guess,
+                "reqs": final_reqs,
             },
         )
+        # Inform the user about detected requirements (short preview)
+        reqs_preview = "\\n".join(final_reqs[:10]) if final_reqs else "none"
+        extra_note = f"\\nDetected requirements:\\n{pre(reqs_preview)}" if final_reqs else "\\nNo external libraries detected. If your code needs any, they will be auto-detected during build."
         await message.answer(
-            f"✅ Analyzed your code.\n\nFramework: {framework}\nToken var: {token_var}\n\nPlease send your bot TOKEN (from @BotFather).",
+            f"✅ Analyzed your code.\\n\\nFramework: {framework}\\nToken var: {token_var}{extra_note}\\n\\nPlease send your bot TOKEN (from @BotFather).",
             reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
             parse_mode=ParseMode.HTML,
         )
@@ -766,11 +777,30 @@ async def handle_upload(message: Message, state: FSMContext):
 
     # Detect entry file for archives/zip or multi-file
     entry_name = _detect_entry(workspace, filename)
-    await state.update_data(pending=PendingHost(workspace=workspace, entry_name=entry_name, bot_record_id=bot_rec["id"], bot_name=bot_rec["name"]).__dict__)
+
+    # Auto-detect requirements for archives as well and keep in state for later
+    autodetected_reqs = []
+    try:
+        from .services.hoster import detect_requirements
+        autodetected_reqs = detect_requirements(workspace)
+    except Exception:
+        autodetected_reqs = []
+
+    await state.update_data(
+        pending=PendingHost(
+            workspace=workspace,
+            entry_name=entry_name,
+            bot_record_id=bot_rec["id"],
+            bot_name=bot_rec["name"]
+        ).__dict__,
+        code_pipeline={"reqs": autodetected_reqs} if autodetected_reqs else {}
+    )
 
     # Ask for app name first (archive/multi-file path)
+    reqs_preview = "\\n".join(autodetected_reqs[:10]) if autodetected_reqs else "none"
+    extra_note = f"\\nDetected requirements:\\n{pre(reqs_preview)}" if autodetected_reqs else "\\nNo requirements.txt found — we'll auto-detect libraries from your code."
     await message.answer(
-        "📝 Please send a name for your app (e.g., MyShopBot).",
+        "📝 Please send a name for your app (e.g., MyShopBot)." + extra_note,
         reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
         parse_mode=ParseMode.HTML,
     )
