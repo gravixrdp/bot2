@@ -196,7 +196,7 @@ _PYP _MAP = {
         'yaml': 'pyyaml',
         'Crypto': 'pycryptodome',
         'OpenSSL': 'pyOpenSSL',
- _code  new </}
+    }
 ,
     "yaml": "pyyaml",
     "Crypto": "pycryptodome",
