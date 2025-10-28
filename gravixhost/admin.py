@@ -508,6 +508,33 @@ async def premium_remove(message: Message):
     remove_premium(user_id)
     await message.answer(f"✅ Premium removed for {code(str(user_id))}.", parse_mode=ParseMode.HTML, reply_markup=admin_menu())
 
+    # Notify the target user about deactivation
+    try:
+        from .keyboards import support_url_kb
+        u = get_user(user_id)
+        display_name = u.get("name") or "User"
+        deact_msg = (
+            "╔═══════════════════════╗\n"
+            "    🌟 WELCOME TO GRAVIXVPSBOT 🌟\n"
+            "╚═══════════════════════╝\n\n"
+            f"👋 Hello {display_name}!\n"
+            f"🆔 Your ID: {code(str(user_id))}\n"
+            "💎 Plan: Premium — Deactivated\n"
+            "📅 Expiry: Expired\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "Your premium has been deactivated. You can continue using the Free plan.\n\n"
+            "To restore Premium (unlimited uptime, multi-bot hosting, priority support), contact us below.\n"
+        )
+        await message.bot.send_message(
+            chat_id=user_id,
+            text=deact_msg,
+            reply_markup=support_url_kb(),
+            parse_mode=ParseMode.HTML,
+        )
+    except Exception:
+        # Silent if user cannot be messaged
+        pass
+
 
 @router.message(F.text.regexp(r"^stopbot\s+\S+$"))
 async def admin_stopbot(message: Message):
