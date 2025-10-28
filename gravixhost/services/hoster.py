@@ -916,7 +916,7 @@ def _try_run():
 
 def _autostart(globs):
     # Try to auto-start common frameworks using objects found in the executed script's globals.
-    g = globs or {}
+    g = globs or {{}}
     vals = list(g.values())
 
     # pyTelegramBotAPI: TeleBot/AsyncTeleBot
