@@ -212,17 +212,9 @@ async def cmd_myinfo(message: Message):
         plan_status = "Premium — Expired"
         expiry_text = bold(human_dt(expiry_dt))
     else:
-        # Not premium
-        if expiry_dt and now >= expiry_dt:
-            plan_status = "Premium — Expired"
-            expiry_text = bold(human_dt(expiry_dt))
-        elif expiry_dt and now < expiry_dt:
-            # Deactivated before expiry
-            plan_status = "Premium — Deactivated"
-            expiry_text = bold(human_dt(expiry_dt))
-        else:
-            plan_status = "Free — No Premium"
-            expiry_text = bold(human_dt(None))
+        # Not premium: always show N/A for expiry regardless of any stored date
+        plan_status = "Free — No Premium"
+        expiry_text = bold(human_dt(None))
 
     text = (
         f"{bold('👤 User Info')}\n"
