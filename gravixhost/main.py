@@ -26,6 +26,7 @@ from .storage import (
     get_active_bots,
     get_user_bots,
     register_referral,
+    user_exists,
 )
 from .services.hoster import save_upload, build_and_run, remove_workspace
 from .services.scheduler import Scheduler
@@ -57,6 +58,9 @@ router = Router(name="user")
 
 @router.message(Command("start"))
 async def cmd_start(message: Message):
+    # Determine if this is the user's first start before creating/updating the user record
+    was_new_user = not user_exists(message.from_user.id)
+
     user = get_user(message.from_user.id)
     update_user(
         message.from_user.id,
@@ -64,10 +68,10 @@ async def cmd_start(message: Message):
         username=message.from_user.username
     )
 
-    # Handle referral payload: /start ref_<user_id>
+    # Handle referral payload: only if this is the very first start for the new user
     try:
         parts = (message.text or "").split(maxsplit=1)
-        if len(parts) > 1 and parts[1].strip().lower().startswith("ref_"):
+        if was_new_user and len(parts) > 1 and parts[1].strip().lower().startswith("ref_"):
             ref_id_str = parts[1].strip()[4:]
             ref_id = int(ref_id_str)
             if register_referral(referrer_id=ref_id, new_user_id=message.from_user.id):
@@ -87,24 +91,34 @@ async def cmd_start(message: Message):
     from .keyboards import channel_join_kb
     is_premium = bool(get_user(message.from_user.id).get("is_premium"))
 
+    # Compute accurate plan status and expiry label
+    from datetime import datetime
+    exp_str = get_user(message.from_user.id).get("premium_expiry")
+    try:
+        exp_dt = datetime.fromisoformat(exp_str) if exp_str else None
+    except Exception:
+        exp_dt = None
+    now = datetime.utcnow()
+    if is_premium and exp_dt and now < exp_dt:
+        plan_status = "Premium — Active"
+        expiry_label = bold(human_dt(exp_dt))
+    elif is_premium and (not exp_dt or now >= (exp_dt or now)):
+        plan_status = "Premium — Expired"
+        expiry_label = "Expired"
+    else:
+        plan_status = "Free 🆓"
+        expiry_label = "Not Applicable"
+
     if is_premium:
         # Premium-styled welcome (high level, same header design)
-        from datetime import datetime
-        expiry_text = ""
-        try:
-            exp = get_user(message.from_user.id).get("premium_expiry")
-            expiry_text = bold(human_dt(datetime.fromisoformat(exp))) if exp else "Not set"
-        except Exception:
-            expiry_text = "Not set"
-
         welcome = (
             "╔═══════════════════════╗\n"
             "    🌟 WELCOME TO GRAVIXVPSBOT 🌟\n"
             "╚═══════════════════════╝\n\n"
             f"👋 Welcome {message.from_user.first_name or 'User'}!\n"
             f"🆔 Your ID: {code(str(message.from_user.id))}\n"
-            "💎 Plan: Premium — Active\n"
-            f"📅 Expires on: {expiry_text}\n\n"
+            f"💎 Plan: {plan_status}\n"
+            f"📅 Expiry: {expiry_label}\n\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
             "🔥 PREMIUM FEATURES:\n\n"
             "⏱️ Unlimited Uptime — your bots stay online\n"
@@ -185,13 +199,38 @@ async def cmd_myinfo(message: Message):
     referred_by = user.get("referred_by")
     referred_by_display = code(str(referred_by)) if referred_by else bold("None")
 
+    # Premium status details
+    from datetime import datetime
+    is_premium = bool(user.get("is_premium"))
+    expiry_dt = _safe_parse(user.get("premium_expiry"))
+    now = datetime.utcnow()
+    if is_premium and expiry_dt and now < expiry_dt:
+        plan_status = "Premium — Active"
+        expiry_text = bold(human_dt(expiry_dt))
+    elif is_premium and (not expiry_dt or now >= (expiry_dt or now)):
+        # Edge case: premium flag set but expiry missing/past
+        plan_status = "Premium — Expired"
+        expiry_text = bold(human_dt(expiry_dt))
+    else:
+        # Not premium
+        if expiry_dt and now >= expiry_dt:
+            plan_status = "Premium — Expired"
+            expiry_text = bold(human_dt(expiry_dt))
+        elif expiry_dt and now < expiry_dt:
+            # Deactivated before expiry
+            plan_status = "Premium — Deactivated"
+            expiry_text = bold(human_dt(expiry_dt))
+        else:
+            plan_status = "Free — No Premium"
+            expiry_text = bold(human_dt(None))
+
     text = (
         f"{bold('👤 User Info')}\n"
         f"• Name: {bold(message.from_user.full_name)}\n"
         f"• ID: {code(str(message.from_user.id))}\n"
-        f"• Status: {'Premium User' if user.get('is_premium') else 'Free User'}\n"
+        f"• Status: {plan_status}\n"
         f"• Hosted Bots: {len(get_user_bots(message.from_user.id))}\n"
-        f"• Plan Expiry: {bold(human_dt(_safe_parse(user.get('premium_expiry'))))}\n"
+        f"• Expiry: {expiry_text}\n"
         f"• Referrals: {bold(str(ref_count))}\n"
         f"• Referred By: {referred_by_display}\n"
     )

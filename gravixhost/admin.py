@@ -81,16 +81,26 @@ async def admin_users_msg(message: Message):
     db = _read_db()
     users = db["users"].values()
     text = [bold("👥 Users")]
+    from datetime import datetime
+    now = datetime.utcnow()
     for u in users:
         apps_count = len(get_user_bots(u["id"]))
         display_name = _format_user_display(u)
         referrals = int((u.get("referral_count") or 0))
+        exp_dt = _safe_parse(u.get("premium_expiry"))
+        is_prem = bool(u.get("is_premium"))
+        if is_prem and exp_dt and now < exp_dt:
+            expiry_text = f"Active until {human_dt(exp_dt)}"
+        elif exp_dt:
+            expiry_text = f"Expired on {human_dt(exp_dt)}"
+        else:
+            expiry_text = "Not Applicable"
         text.append(
             f"• {bold(display_name)} — ID {code(str(u['id']))} — "
-            f"Status: {'Premium' if u.get('is_premium') else 'Free'} — "
+            f"Status: {'Premium' if is_prem else 'Free'} — "
             f"Apps: {bold(str(apps_count))} — "
             f"Referrals: {bold(str(referrals))} — "
-            f"Expiry: {human_dt(_safe_parse(u.get('premium_expiry')))}"
+            f"Expiry: {expiry_text}"
         )
     await message.answer("\n".join(text), reply_markup=admin_menu(), parse_mode=ParseMode.HTML)
 
@@ -658,16 +668,26 @@ async def admin_users(cb: CallbackQuery):
     for u in users:
         u2 = await _enrich_user_profile(cb.message.bot, u)
         enriched.append(u2)
+    from datetime import datetime
+    now = datetime.utcnow()
     for u in enriched:
         display_name = _format_user_display(u)
         apps_count = len(get_user_bots(u["id"]))
         referrals = int((u.get("referral_count") or 0))
+        exp_dt = _safe_parse(u.get("premium_expiry"))
+        is_prem = bool(u.get("is_premium"))
+        if is_prem and exp_dt and now < exp_dt:
+            expiry_text = f"Active until {human_dt(exp_dt)}"
+        elif exp_dt:
+            expiry_text = f"Expired on {human_dt(exp_dt)}"
+        else:
+            expiry_text = "Not Applicable"
         text.append(
             f"• {bold(display_name)} — ID {code(str(u['id']))} — "
-            f"Status: {'Premium' if u.get('is_premium') else 'Free'} — "
+            f"Status: {'Premium' if is_prem else 'Free'} — "
             f"Apps: {bold(str(apps_count))} — "
             f"Referrals: {bold(str(referrals))} — "
-            f"Expiry: {human_dt(_safe_parse(u.get('premium_expiry')))}"
+            f"Expiry: {expiry_text}"
         )
     await cb.message.answer("\n".join(text), reply_markup=admin_fixed_bar(), parse_mode=ParseMode.HTML)
     await cb.answer()
