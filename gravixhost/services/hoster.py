@@ -1253,19 +1253,22 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
                     # Try to capture traceback block
                     start_idx = None
                     for i, line in enumerate(filtered):
-                        if "Traceback (most recent call last):" in        break
-                if not short_err and filtered:
-                    # Use last non-empty line (not from runner)
-                    for line in reversed(filtered):
-                        if line.strip():
-                            short_err = line.strip()
+                        if "Traceback (most recent call last):" in line:
+                            start_idx = i
                             break
-                # If still nothing useful, provide guidance
+                    if start_idx is not None:
+                        snippet_lines = filtered[start_idx:start_idx + 8]
+                    else:
+                        # Fallback: last 6 non-empty lines
+                        non_empty = [l for l in filtered if l.strip()]
+                        snippet_lines = non_empty[-6:] if non_empty else []
+
+                short_err = "\n".join(snippet_lines).strip() if snippet_lines else ""
                 if not short_err:
                     short_err = "process exited without error logs — ensure your bot starts a polling loop (e.g., app.run_polling())"
 
                 # Choose message based on exit code
-                msg = f"{short_err} (exit code {exit_code if exit_code is not None else '?'})"
+                msg = f"{short_err}\n(exit code {exit_code if exit_code is not None else '?'})"
                 log_event(f"Runtime crashed {runtime_id} for {bot_id}: {msg}")
                 # Stop and remove failed container (no restart policy)
                 try:
