@@ -517,34 +517,34 @@ def build_and_run_from_code(
     token: str,
 ) -> Tuple[bool, Optional[str], Optional[str]]:
     """
-    Build and run a single-file bot exactly like the reference script approach.
-    Returns (ok, runtime_id, error). Uses Docker isolation and existing runtime settings.
+    Advanced single-file builder:
+    - Rewrite token reads to use environment (so user doesn't need to paste token in code).
+    - Use the same runner/Dockerfile as multi-file to inject token safely.
+    - Pass TELEGRAM_TOKEN at runtime instead of baking ENV into the image.
+    - Short health check; surface concise error logs if it exits immediately.
     """
     temp_dir = None
     client = docker_from_env()
     try:
         temp_dir = tempfile.mkdtemp()
+
+        # Rewrite code to read token from environment where possible and fix common syntax issues
+        try:
+            framework_detected, candidate_names = detect_framework(code)
+            # If framework detection disagrees with provided, keep provided 'framework' for base image choice.
+            _ = framework_detected
+            code = rewrite_token_in_code(code, env_keys=_ENV_KEYS_DEFAULT, candidate_vars=candidate_names)
+        except Exception:
+            code = _fix_common_syntax_issues(code)
+
         # Write code and requirements
         with open(os.path.join(temp_dir, "bot.py"), "w", encoding="utf-8") as f:
             f.write(code)
         with open(os.path.join(temp_dir, "requirements.txt"), "w", encoding="utf-8") as f:
             f.write("\n".join(reqs) if reqs else "")
 
-        # Choose base image similar to the sample
-        base_img = AIOGRAM_V2_IMAGE if framework == 'aiogram_v2' else DEFAULT_BASE_IMAGE
-        dockerfile = (
-            f"FROM {base_img}\n"
-            "WORKDIR /app\n"
-            "COPY requirements.txt .\n"
-            "RUN pip install --no-cache-dir -r requirements.txt\n"
-            "COPY bot.py .\n"
-            f"ENV TOKEN={token}\n"
-            f"ENV BOT_TOKEN={token}\n"
-            f"ENV {token_var}={token}\n"
-            "CMD [\"python\",\"-u\",\"bot.py\"]\n"
-        )
-        with open(os.path.join(temp_dir, "Dockerfile"), "w", encoding="utf-8") as f:
-            f.write(dockerfile)
+        # Write runner + Dockerfile like the hardened path
+        write_runner_and_dockerfile(temp_dir, entry="bot.py", requirements=reqs)
 
         image_tag = f"hostbot_{uid}_{name}_{int(time.time())}".lower().replace(" ", "_").replace("-", "_")
         container_name = f"hostbot_{uid}_{name}_{int(time.time())}".lower().replace(" ", "_").replace("-", "_")
@@ -552,7 +552,7 @@ def build_and_run_from_code(
         # Build image
         client.images.build(path=temp_dir, tag=image_tag, rm=True)
 
-        # Select network (prefer configured runtime network; otherwise default bridge)
+        # Ensure network exists or use default bridge
         network = RUNTIME_NETWORK
         if network:
             try:
@@ -564,20 +564,73 @@ def build_and_run_from_code(
                 log_event(f"Could not verify/create network '{network}', proceeding with defaults.")
                 network = None
 
+        # Run container with TELEGRAM_TOKEN env and resource limits
         container = client.containers.run(
             image_tag,
             name=container_name,
             detach=True,
+            environment={
+                "TELEGRAM_TOKEN": token,
+                "BOT_TOKEN": token,
+                "TOKEN": token,
+                "TELEGRAM_BOT_TOKEN": token,
+                token_var: token if token_var else token,
+            },
             cpu_quota=DEFAULT_CPU_QUOTA,
             mem_limit=DEFAULT_MEM_LIMIT,
             pids_limit=DEFAULT_PIDS_LIMIT,
             network=network if network else None,
-            restart_policy={"Name": "unless-stopped"},
+            restart_policy={"Name": "no"},
         )
+
         rid = container.id
+
+        # Short health check: if it exits immediately, extract helpful error
+        try:
+            time.sleep(2)
+            container.reload()
+            status = getattr(container, "status", "")
+            if status != "running":
+                exit_code = None
+                try:
+                    container.reload()
+                    exit_code = container.attrs.get("State", {}).get("ExitCode")
+                except Exception:
+                    exit_code = None
+
+                logs = get_runtime_logs(rid, tail=800) or ""
+                lines = logs.splitlines() if logs else []
+                filtered = [l for l in lines if not l.startswith("gravix_runner:")]
+                short_err = ""
+                for line in filtered:
+                    if any(k in line for k in ("Traceback", "SyntaxError", "Error", "Exception", "Unauthorized", "InvalidToken", "ValueError", "RuntimeError")):
+                        short_err = line.strip()
+                        break
+                if not short_err and filtered:
+                    for line in reversed(filtered):
+                        if line.strip():
+                            short_err = line.strip()
+                            break
+                if not short_err:
+                    short_err = "process exited without error logs — ensure your bot starts a polling loop (e.g., app.run_polling())"
+
+                msg = f"{short_err} (exit code {exit_code if exit_code is not None else '?'})"
+                log_event(f"Runtime crashed {rid} for {name}: {msg}")
+                try:
+                    client.api.remove_container(rid, force=True)
+                except Exception:
+                    pass
+                return False, None, f"runtime_error: {msg}"
+        except Exception:
+            pass
+
         if temp_dir:
             shutil.rmtree(temp_dir, ignore_errors=True)
         return True, rid, None
+    except docker_errors.BuildError:
+        if temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        return False, None, "build_error"
     except Exception as e:
         if temp_dir:
             shutil.rmtree(temp_dir, ignore_errors=True)
