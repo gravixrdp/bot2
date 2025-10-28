@@ -241,8 +241,8 @@ def _safe_parse(s):
 
 
 def _detect_entry(workspace: str, uploaded_filename: str) -> str:
-    # Prefer typical names if present
-    candidates = ["bot.py", "app.py", "main.py", "bold.py"]
+    # Prefer typical entry filenames if present
+    candidates = ["bot.py", "app.py", "main.py", "index.py"]
     for c in candidates:
         p = os.path.join(workspace, c)
         if os.path.exists(p):
