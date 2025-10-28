@@ -457,20 +457,39 @@ async def premium_set(message: Message):
         reply_markup=admin_menu(),
     )
 
-    # Notify the target user
+    # Notify the target user with a premium-styled welcome
     try:
         from datetime import datetime
+        from .keyboards import channel_join_kb
         updated = get_user(user_id)
         expiry_str = updated.get("premium_expiry")
         expiry_text = human_dt(datetime.fromisoformat(expiry_str)) if expiry_str else "Not set"
+
+        premium_msg = (
+            "╔═══════════════════════╗\n"
+            "    🌟 WELCOME TO GRAVIXVPSBOT 🌟\n"
+            "╚═══════════════════════╝\n\n"
+            f"👋 Welcome {updated.get('name') or 'User'}!\n"
+            f"🆔 Your ID: {code(str(user_id))}\n"
+            "💎 Plan: Premium — Active\n"
+            f"📅 Expires on: {bold(expiry_text)}\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "🔥 PREMIUM FEATURES:\n\n"
+            "⏱️ Unlimited Uptime — your bots stay online\n"
+            "🤖 Multiple Bots — host more than one bot\n"
+            "💬 Priority Support — access Contact Admin\n"
+            "⚙️ Manage My Bots — view, stop, restart, remove\n"
+            "📜 Bot & System Logs — inspect recent activity\n"
+            "👤 My Info — account and usage overview\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "✨ Welcome aboard — enjoy premium capabilities! ✨\n"
+        )
+
+        # Send the premium welcome with a channel join button
         await message.bot.send_message(
             chat_id=user_id,
-            text=(
-                "🎉 " + str(bold("Premium Activated")) + "\n"
-                f"• Duration: {bold(str(days))} days\n"
-                f"• Expires on: {bold(expiry_text)}\n"
-                "Enjoy unlimited uptime and premium features!"
-            ),
+            text=premium_msg,
+            reply_markup=channel_join_kb(),
             parse_mode=ParseMode.HTML,
         )
     except Exception:
