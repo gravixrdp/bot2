@@ -908,16 +908,22 @@ def _heartbeat():
         time.sleep(30)
 threading.Thread(target=_heartbeat, daemon=True).start()
 
-# Run the user's entry file in this process
+# Run the user's entry file and capture its global namespace
 print('gravix_runner: entry={entry_file} token_len=%d' % (len(token)))
 def _try_run():
-    runpy.run_path('{entry_file}', init_globals=init_globals)
+    # Return the globals dict resulting from executing the user script
+    return runpy.run_path('{entry_file}', init_globals=init_globals)
 
-def _autostart_from_globals():
-    g = globals()
+def _autostart(globs):
+    """
+    Try to auto-start common frameworks using objects found in the executed script's globals.
+    """
+    g = globs or {}
+    vals = list(g.values())
+
     # pyTelegramBotAPI: TeleBot/AsyncTeleBot
     try:
-        for v in list(g.values()):
+        for v in vals:
             if hasattr(v, 'infinity_polling') or hasattr(v, 'polling'):
                 try:
                     if hasattr(v, 'infinity_polling'):
@@ -931,9 +937,10 @@ def _autostart_from_globals():
                     print('gravix_runner: polling failed:', e)
     except Exception:
         pass
+
     # python-telegram-bot: Application.run_polling(), Updater.start_polling()
     try:
-        for v in list(g.values()):
+        for v in vals:
             if hasattr(v, 'run_polling'):
                 try:
                     print('gravix_runner: auto-start Application.run_polling()')
@@ -952,12 +959,34 @@ def _autostart_from_globals():
                     print('gravix_runner: start_polling failed:', e)
     except Exception:
         pass
+
+    # Pyrogram: Client.run() or start()+idle()
+    try:
+        for v in vals:
+            if hasattr(v, 'run'):
+                try:
+                    print('gravix_runner: auto-start Pyrogram.Client.run()')
+                    v.run()
+                    return True
+                except Exception as e:
+                    print('gravix_runner: run failed:', e)
+            if hasattr(v, 'start') and hasattr(v, 'idle'):
+                try:
+                    print('gravix_runner: auto-start Pyrogram.Client.start()+idle()')
+                    v.start()
+                    v.idle()
+                    return True
+                except Exception as e:
+                    print('gravix_runner: start+idle failed:', e)
+    except Exception:
+        pass
+
     return False
 
 try:
-    _try_run()
+    g = _try_run()
     # If the user script returns immediately, attempt to auto-start common frameworks
-    started = _autostart_from_globals()
+    started = _autostart(g)
     if not started:
         print('gravix_runner: user script finished (no long-running loop)')
     sys.exit(0)
@@ -982,8 +1011,8 @@ except ModuleNotFoundError as e:
         print('gravix_runner: auto-installing %s for missing module %s' % (pkg, missing))
         try:
             subprocess.check_call([sys.executable, '-m', 'pip', 'install', pkg])
-            _try_run()
-            started = _autostart_from_globals()
+            g = _try_run()
+            started = _autostart(g)
             if not started:
                 print('gravix_runner: user script finished (no long-running loop)')
             sys.exit(0)
