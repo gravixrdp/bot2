@@ -745,10 +745,10 @@ def _parse_pipfile(text: str) -> List[str]:
             block = re.search(rf"(?s){section}(.+?)(\\n\\[|\\Z)", text)
             if block:
                 body = block.group(1)
-                for m in re.finditer(r"(?m)^\\s*([A-Za-z0-9_.+-]+)\\s*=\\s*['\\\"]?([^'\\\"\\n]+)['\\\"]?", body):
+                for m in re.finditer(r"(?m)^\\s*([A-Za-z0-9_.+-]+)\\s*=\\s*['\"]?([^'\"\\n]+)['\"]?", body):
                     name = m.group(1)
                     ver = m.group(2).strip()
-                    spec = f"{name}{('==' + ver) if re.match(r'^\\d', ver) else ver if ver else ''}".strip()
+                    spec = f"{name}{('==' + ver) if re.match(r'^\\d', ver) else ver if ver else ''}".strip()"{name}{('==' + ver) if re.match(r'^\\d', ver) else ver if ver else ''}\".strip()
                     norm = _normalize_requirement(spec) or _normalize_requirement(name)
                     if norm:
                         reqs.append(norm)
@@ -913,10 +913,53 @@ print('gravix_runner: entry={entry_file} token_len=%d' % (len(token)))
 def _try_run():
     runpy.run_path('{entry_file}', init_globals=init_globals)
 
+def _autostart_from_globals():
+    g = globals()
+    # pyTelegramBotAPI: TeleBot/AsyncTeleBot
+    try:
+        for v in list(g.values()):
+            if hasattr(v, 'infinity_polling') or hasattr(v, 'polling'):
+                try:
+                    if hasattr(v, 'infinity_polling'):
+                        print('gravix_runner: auto-start TeleBot.infinity_polling()')
+                        v.infinity_polling()
+                        return True
+                    print('gravix_runner: auto-start TeleBot.polling()')
+                    v.polling(none_stop=True)
+                    return True
+                except Exception as e:
+                    print('gravix_runner: polling failed:', e)
+    except Exception:
+        pass
+    # python-telegram-bot: Application.run_polling(), Updater.start_polling()
+    try:
+        for v in list(g.values()):
+            if hasattr(v, 'run_polling'):
+                try:
+                    print('gravix_runner: auto-start Application.run_polling()')
+                    v.run_polling()
+                    return True
+                except Exception as e:
+                    print('gravix_runner: run_polling failed:', e)
+            if hasattr(v, 'start_polling'):
+                try:
+                    print('gravix_runner: auto-start Updater.start_polling()')
+                    v.start_polling()
+                    if hasattr(v, 'idle'):
+                        v.idle()
+                    return True
+                except Exception as e:
+                    print('gravix_runner: start_polling failed:', e)
+    except Exception:
+        pass
+    return False
+
 try:
     _try_run()
-    # If the user script returns immediately, provide a clear message.
-    print('gravix_runner: user script finished (no long-running loop)')
+    # If the user script returns immediately, attempt to auto-start common frameworks
+    started = _autostart_from_globals()
+    if not started:
+        print('gravix_runner: user script finished (no long-running loop)')
     sys.exit(0)
 except ModuleNotFoundError as e:
     missing = getattr(e, 'name', None)
@@ -940,7 +983,9 @@ except ModuleNotFoundError as e:
         try:
             subprocess.check_call([sys.executable, '-m', 'pip', 'install', pkg])
             _try_run()
-            print('gravix_runner: user script finished (no long-running loop)')
+            started = _autostart_from_globals()
+            if not started:
+                print('gravix_runner: user script finished (no long-running loop)')
             sys.exit(0)
         except Exception:
             import traceback; traceback.print_exc(); sys.exit(1)
