@@ -192,6 +192,7 @@ def get_user(user_id: int) -> Dict[str, Any]:
             "premium_expiry": None,
             "referral_count": 0,
             "referred_by": None,
+            "created_at": datetime.utcnow().isoformat(),
         }
         users[str(user_id)] = user
         _write_db(db)
@@ -203,9 +204,15 @@ def get_user(user_id: int) -> Dict[str, Any]:
             user["referral_count"] = 0
         if "referred_by" not in user:
             user["referred_by"] = None
+        if "created_at" not in user:
+            user["created_at"] = datetime.utcnow().isoformat()
         users[str(user_id)] = user
         _write_db(db)
     return user
+
+def user_exists(user_id: int) -> bool:
+    db = _read_db()
+    return str(user_id) in db.get("users", {})
 
 
 def update_user(user_id: int, **kwargs):

@@ -26,6 +26,7 @@ from .storage import (
     get_active_bots,
     get_user_bots,
     register_referral,
+    user_exists,
 )
 from .services.hoster import save_upload, build_and_run, remove_workspace
 from .services.scheduler import Scheduler
@@ -57,6 +58,9 @@ router = Router(name="user")
 
 @router.message(Command("start"))
 async def cmd_start(message: Message):
+    # Determine if this is the user's first start before creating/updating the user record
+    was_new_user = not user_exists(message.from_user.id)
+
     user = get_user(message.from_user.id)
     update_user(
         message.from_user.id,
@@ -64,10 +68,10 @@ async def cmd_start(message: Message):
         username=message.from_user.username
     )
 
-    # Handle referral payload: /start ref_<user_id>
+    # Handle referral payload: only if this is the very first start for the new user
     try:
         parts = (message.text or "").split(maxsplit=1)
-        if len(parts) > 1 and parts[1].strip().lower().startswith("ref_"):
+        if was_new_user and len(parts) > 1 and parts[1].strip().lower().startswith("ref_"):
             ref_id_str = parts[1].strip()[4:]
             ref_id = int(ref_id_str)
             if register_referral(referrer_id=ref_id, new_user_id=message.from_user.id):
