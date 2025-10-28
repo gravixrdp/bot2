@@ -194,7 +194,7 @@ _PYP _MAP = {
         'cv2': 'opencv-python',
         'bs4': 'beautifulsoup4',
         'yaml': 'pyyaml',
-        'Crypto': 'pycryptodome',
+        'Crypto': 'pyCrypto': 'pycryptodome',
         'OpenSSL': 'pyOpenSSL',
  _code  new </}
 ,
