@@ -180,6 +180,11 @@ async def any_back(message: Message, state: FSMContext):
 @router.message(Command("myinfo"))
 async def cmd_myinfo(message: Message):
     user = get_user(message.from_user.id)
+    # Referral stats
+    ref_count = int(user.get("referral_count") or 0)
+    referred_by = user.get("referred_by")
+    referred_by_display = code(str(referred_by)) if referred_by else bold("None")
+
     text = (
         f"{bold('👤 User Info')}\n"
         f"• Name: {bold(message.from_user.full_name)}\n"
@@ -187,6 +192,8 @@ async def cmd_myinfo(message: Message):
         f"• Status: {'Premium User' if user.get('is_premium') else 'Free User'}\n"
         f"• Hosted Bots: {len(get_user_bots(message.from_user.id))}\n"
         f"• Plan Expiry: {bold(human_dt(_safe_parse(user.get('premium_expiry'))))}\n"
+        f"• Referrals: {bold(str(ref_count))}\n"
+        f"• Referred By: {referred_by_display}\n"
     )
     await message.answer(text, reply_markup=main_menu(user.get("is_premium"), show_admin=is_admin(message.from_user.id)), parse_mode=ParseMode.HTML)
 
