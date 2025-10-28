@@ -185,15 +185,19 @@ BUILD_TIMEOUT_SECS = 300
 
 # Map common import names to their PyPI package equivalents
 # This helps when users write code like "import telebot" but the pip package is "pyTelegramBotAPI"
-_PYPI_MAP = {
-    "telebot": "pyTelegramBotAPI",
-    "telegram": "python-telegram-bot",  # PTB provides 'telegram' module
-    "PIL": "pillow",
-    "cv2": "opencv-python",
-    "dotenv": "python-dotenv",
-    "bs4": "beautifulsoup4",
-    "yaml": "pyyaml",
-    "Crypto": "pycryptodome",
+_PYP _MAP = {
+        'telebot': 'pyTelegramBotAPI',
+        'telegram': 'python-telegram-bot',
+        'PIL': 'pillow',
+        'Pillow': 'Pillow',
+        'requests': 'requests',
+        'cv2': 'opencv-python',
+        'bs4': 'beautifulsoup4',
+        'yaml': 'pyyaml',
+        'Crypto': 'pycryptodome',
+        'OpenSSL': 'pyOpenSSL',
+ _code  new </}
+,
     # Common mismatches / case variants
     "OpenSSL": "pyOpenSSL",
     "configparser": "configparser",
@@ -464,29 +468,35 @@ def guess_requirements(framework: str) -> List[str]:
 def analyze_code(code: str) -> tuple[str, str, List[str]]:
     """
     Return (framework, token_var, reqs_guess) using a lightweight approach
-    like the reference script.
+    like the reference script, BUT also include non-framework imports such as
+    requests, Pillow, etc. so single-file bots work without a user-supplied
+    requirements.txt.
     """
     # Framework detection (light)
     framework = "unknown"
+    detected_imports = set()
     try:
         tree = ast.parse(code)
-        imports = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    imports.add(alias.name.split('.')[0])
+                    detected_imports.add((alias.name or "").split(".")[0])
             elif isinstance(node, ast.ImportFrom) and node.module:
-                imports.add(node.module.split('.')[0])
-        if 'aiogram' in imports:
-            framework = 'aiogram_v2' if 'executor.start_polling' in code else 'aiogram_v3'
-        elif 'telebot' in imports:
-            framework = 'pytelegrambotapi'
-        elif 'telegram' in imports:
-            framework = 'python-telegram-bot'
-        elif 'pyrogram' in imports:
-            framework = 'pyrogram'
+                detected_imports.add((node.module or "").split(".")[0])
+        if "aiogram" in detected_imports:
+            framework = "aiogram_v2" if "executor.start_polling" in code else "aiogram_v3"
+        elif "telebot" in detected_imports:
+            framework = "pytelegrambotapi"
+        elif "telegram" in detected_imports:
+            framework = "python-telegram-bot"
+        elif "pyrogram" in detected_imports:
+            framework = "pyrogram"
     except Exception:
-        pass
+        # Fallback regex import detection
+        for m in re.finditer(r"(?m)^[ \t]*import[ \t]+([A-Za-z_][A-Za-z0-9_\.]*)", code):
+            detected_imports.add(m.group(1).split(".")[0])
+        for m in re.finditer(r"(?m)^[ \t]*from[ \t]+([A-Za-z_][A-Za-z0-9_\.]*)[ \t]+import[ \t]+", code):
+            detected_imports.add(m.group(1).split(".")[0])
 
     # Token variable guess
     token_var = "TOKEN"
@@ -499,7 +509,23 @@ def analyze_code(code: str) -> tuple[str, str, List[str]]:
             token_var = m.group(1)
             break
 
-    reqs = guess_requirements(framework)
+    # Build requirement guesses: framework + mapped imports
+    reqs_set = set(guess_requirements(framework))
+    # Map detected imports to pypi names (reuse normalizer logic)
+    for base in sorted(detected_imports):
+        norm = _normalize_requirement(base)
+        if norm:
+            reqs_set.add(norm)
+
+    # Ensure explicit mappings for certain frameworks
+    if "telebot" in detected_imports:
+        reqs_set.add("pyTelegramBotAPI")
+    if "telegram" in detected_imports:
+        # Pin PTB to >=21 for modern APIs
+        reqs_set = {r for r in reqs_set if not r.lower().startswith("python-telegram-bot")}
+        reqs_set.add("python-telegram-bot>=21.0")
+
+    reqs = sorted(reqs_set)
     return framework, token_var, reqs
 
 
