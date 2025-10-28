@@ -915,9 +915,7 @@ def _try_run():
     return runpy.run_path('{entry_file}', init_globals=init_globals)
 
 def _autostart(globs):
-    """
-    Try to auto-start common frameworks using objects found in the executed script's globals.
-    """
+    # Try to auto-start common frameworks using objects found in the executed script's globals.
     g = globs or {}
     vals = list(g.values())
 
