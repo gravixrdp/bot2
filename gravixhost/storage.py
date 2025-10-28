@@ -190,6 +190,8 @@ def get_user(user_id: int) -> Dict[str, Any]:
             "username": "",
             "is_premium": False,
             "premium_expiry": None,
+            "referral_count": 0,
+            "referred_by": None,
         }
         users[str(user_id)] = user
         _write_db(db)
@@ -197,8 +199,12 @@ def get_user(user_id: int) -> Dict[str, Any]:
         # Ensure keys exist
         if "username" not in user:
             user["username"] = ""
-            users[str(user_id)] = user
-            _write_db(db)
+        if "referral_count" not in user:
+            user["referral_count"] = 0
+        if "referred_by" not in user:
+            user["referred_by"] = None
+        users[str(user_id)] = user
+        _write_db(db)
     return user
 
 
@@ -210,6 +216,11 @@ def update_user(user_id: int, **kwargs):
     for k, v in kwargs.items():
         if v is not None:
             user[k] = v
+    # Keep referral fields present
+    if "referral_count" not in user:
+        user["referral_count"] = 0
+    if "referred_by" not in user:
+        user["referred_by"] = None
     users[str(user_id)] = user
     _write_db(db)
 
@@ -226,6 +237,38 @@ def set_premium(user_id: int, days: int):
     expiry = base + timedelta(days=days)
     update_user(user_id, is_premium=True, premium_expiry=expiry.isoformat())
     log_event(f"Premium set for {user_id} until {expiry.isoformat()}")
+
+def register_referral(referrer_id: int, new_user_id: int) -> bool:
+    """
+    Register a referral: if new_user has no referred_by and referrer is valid, link them
+    and award +1 day premium to the referrer. Returns True if awarded.
+    """
+    if referrer_id == new_user_id:
+        return False
+    db = _read_db()
+    users = db.get("users", {})
+    # Ensure both users exist in DB
+    referrer = get_user(referrer_id)
+    new_user = get_user(new_user_id)
+    # Only first-time referral counts
+    if new_user.get("referred_by"):
+        return False
+    # Link referral
+    new_user["referred_by"] = str(referrer_id)
+    # Increment count
+    try:
+        ref_count = int(referrer.get("referral_count") or 0)
+    except Exception:
+        ref_count = 0
+    referrer["referral_count"] = ref_count + 1
+    users[str(referrer_id)] = referrer
+    users[str(new_user_id)] = new_user
+    db["users"] = users
+    _write_db(db)
+    # Award +1 day premium
+    set_premium(referrer_id, 1)
+    log_event(f"Referral: {new_user_id} referred_by {referrer_id}; ref_count={ref_count + 1}")
+    return True
 
 
 def remove_premium(user_id: int):

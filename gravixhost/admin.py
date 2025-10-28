@@ -84,10 +84,12 @@ async def admin_users_msg(message: Message):
     for u in users:
         apps_count = len(get_user_bots(u["id"]))
         display_name = _format_user_display(u)
+        referrals = int((u.get("referral_count") or 0))
         text.append(
             f"• {bold(display_name)} — ID {code(str(u['id']))} — "
             f"Status: {'Premium' if u.get('is_premium') else 'Free'} — "
             f"Apps: {bold(str(apps_count))} — "
+            f"Referrals: {bold(str(referrals))} — "
             f"Expiry: {human_dt(_safe_parse(u.get('premium_expiry')))}"
         )
     await message.answer("\n".join(text), reply_markup=admin_menu(), parse_mode=ParseMode.HTML)
@@ -632,10 +634,12 @@ async def admin_users(cb: CallbackQuery):
     for u in enriched:
         display_name = _format_user_display(u)
         apps_count = len(get_user_bots(u["id"]))
+        referrals = int((u.get("referral_count") or 0))
         text.append(
             f"• {bold(display_name)} — ID {code(str(u['id']))} — "
             f"Status: {'Premium' if u.get('is_premium') else 'Free'} — "
             f"Apps: {bold(str(apps_count))} — "
+            f"Referrals: {bold(str(referrals))} — "
             f"Expiry: {human_dt(_safe_parse(u.get('premium_expiry')))}"
         )
     await cb.message.answer("\n".join(text), reply_markup=admin_fixed_bar(), parse_mode=ParseMode.HTML)

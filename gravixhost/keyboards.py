@@ -35,6 +35,7 @@ def main_menu(is_premium: bool, show_admin: bool = False) -> ReplyKeyboardMarkup
             KeyboardButton(text="👤 My Info"),
             KeyboardButton(text="⏳ Premium Time Left"),
             KeyboardButton(text="🏠 Main Menu"),
+            KeyboardButton(text="🎁 Referral"),
         ]
     else:
         buttons = [
@@ -46,6 +47,7 @@ def main_menu(is_premium: bool, show_admin: bool = False) -> ReplyKeyboardMarkup
             KeyboardButton(text="👤 My Info"),
             KeyboardButton(text="⏳ Premium Time Left"),
             KeyboardButton(text="🏠 Main Menu"),
+            KeyboardButton(text="🎁 Referral"),
         ]
     if show_admin:
         # Place Admin Panel button at the end (last row)
@@ -166,3 +168,20 @@ def bots_action_list(bots, action_text: str, prefix: str) -> InlineKeyboardMarku
         bid = b.get("id")
         rows.append([InlineKeyboardButton(text=f"{action_text}: {name} — {bid}", callback_data=f"{prefix}:{bid}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+def referral_share_kb(ref_url: str, share_text: str = "") -> InlineKeyboardMarkup:
+    """
+    Inline keyboard for referral:
+    - Join/Open Link: opens the referral link (start payload)
+    - Share Referral: opens Telegram share dialog with prefilled link and text
+    """
+    import urllib.parse as _u
+    share = f"https://t.me/share/url?url={_u.quote(ref_url)}"
+    if share_text:
+        share += f"&text={_u.quote(share_text)}"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Open Referral Link", url=ref_url)],
+            [InlineKeyboardButton(text="Share Referral", url=share)],
+        ]
+    )
