@@ -62,35 +62,68 @@ async def cmd_start(message: Message):
         name=message.from_user.full_name,
         username=message.from_user.username
     )
-    # Professional welcome message in the requested box-style format (Free plan)
     from .keyboards import channel_join_kb
-    welcome = (
-        "╔═══════════════════════╗\n"
-        "    🌟 WELCOME TO GRAVIXVPSBOT 🌟\n"
-        "╚═══════════════════════╝\n\n"
-        f"👋 Welcome {message.from_user.first_name or 'User'}!\n"
-        f"🆔 Your ID: {code(str(message.from_user.id))}\n"
-        "💎 Account: Free 🆓\n"
-        "⏱️ Hosting Limit: 1 bot • Uptime: 1 hour\n\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "🎯 FREE USER FEATURES:\n\n"
-        "📦 Host My Bot — Upload your bot (.py or .zip)\n"
-        "📘 How it Works — Step-by-step hosting guide\n"
-        "⚙️ Manage My Bots — View, stop, restart, remove\n"
-        "📜 Bot Logs — See logs for a specific bot\n"
-        "🧾 My Logs — Recent system activity\n"
-        "👤 My Info — Your account and usage\n"
-        "🆘 Support — Contact support\n"
-        "💰 Upgrade to Premium — Get unlimited uptime\n\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "✨ Start exploring now! ✨\n"
-    )
-    # First send the welcome with an inline "Join Channel" button
+    is_premium = bool(user.get("is_premium"))
+
+    if is_premium:
+        # Premium-styled welcome (high level, same header design)
+        from datetime import datetime
+        expiry_text = ""
+        try:
+            exp = user.get("premium_expiry")
+            expiry_text = bold(human_dt(datetime.fromisoformat(exp))) if exp else "Not set"
+        except Exception:
+            expiry_text = "Not set"
+
+        welcome = (
+            "╔═══════════════════════╗\n"
+            "    🌟 WELCOME TO GRAVIXVPSBOT 🌟\n"
+            "╚═══════════════════════╝\n\n"
+            f"👋 Welcome {message.from_user.first_name or 'User'}!\n"
+            f"🆔 Your ID: {code(str(message.from_user.id))}\n"
+            "💎 Plan: Premium — Active\n"
+            f"📅 Expires on: {expiry_text}\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "🔥 PREMIUM FEATURES:\n\n"
+            "⏱️ Unlimited Uptime — your bots stay online\n"
+            "🤖 Multiple Bots — host more than one bot\n"
+            "💬 Priority Support — access Contact Admin\n"
+            "⚙️ Manage My Bots — view, stop, restart, remove\n"
+            "📜 Bot & System Logs — inspect recent activity\n"
+            "👤 My Info — account and usage overview\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "✨ Welcome aboard — enjoy premium capabilities! ✨\n"
+        )
+    else:
+        # Professional welcome message in the requested box-style format (Free plan)
+        welcome = (
+            "╔═══════════════════════╗\n"
+            "    🌟 WELCOME TO GRAVIXVPSBOT 🌟\n"
+            "╚═══════════════════════╝\n\n"
+            f"👋 Welcome {message.from_user.first_name or 'User'}!\n"
+            f"🆔 Your ID: {code(str(message.from_user.id))}\n"
+            "💎 Account: Free 🆓\n"
+            "⏱️ Hosting Limit: 1 bot • Uptime: 1 hour\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "🎯 FREE USER FEATURES:\n\n"
+            "📦 Host My Bot — Upload your bot (.py or .zip)\n"
+            "📘 How it Works — Step-by-step hosting guide\n"
+            "⚙️ Manage My Bots — View, stop, restart, remove\n"
+            "📜 Bot Logs — See logs for a specific bot\n"
+            "🧾 My Logs — Recent system activity\n"
+            "👤 My Info — Your account and usage\n"
+            "🆘 Support — Contact support\n"
+            "💰 Upgrade to Premium — Get unlimited uptime\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "✨ Start exploring now! ✨\n"
+        )
+
+    # Send welcome with channel join button
     await message.answer(welcome, reply_markup=channel_join_kb(), parse_mode=ParseMode.HTML)
     # Then show the main menu so the reply keyboard is available
     await message.answer(
         bold("🏠 Main Menu"),
-        reply_markup=main_menu(user.get("is_premium"), show_admin=is_admin(message.from_user.id)),
+        reply_markup=main_menu(is_premium, show_admin=is_admin(message.from_user.id)),
         parse_mode=ParseMode.HTML,
     )
 
