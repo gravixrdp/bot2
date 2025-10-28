@@ -872,19 +872,22 @@ def detect_requirements(workspace: str) -> List[str]:
     for r in reqs_from_imports:
         add_spec(r)
 
-    # Consolidate common duplicates/pins
-    def _consolidate(pack: str, pinned: str):
-        pack_lower = pack.lower()
-        pinned_lower = pinned.lower()
-        if any(x.startswith(pack_lower) for x in list(seen_lower)):
-            # Remove all variants of 'pack' and add pinned
-            nonlocal final, seen_lower
-            final = [x for x in final if not x.lower().startswith(pack_lower)]
-            seen_lower = {x.lower() for x in final}
-            add_spec(pinned)
+    # Consolidate common duplicates/pins without nonlocal usage
+    def _present(pack: str) -> bool:
+        p = pack.lower()
+        return any(x.lower().startswith(p) for x in final)
 
-    _consolidate("python-telegram-bot", "python-telegram-bot>=21.0")
-    _consolidate("aiogram", "aiogram>=3.0")
+    # python-telegram-bot -> pin to >=21.0
+    if _present("python-telegram-bot"):
+        final = [x for x in final if not x.lower().startswith("python-telegram-bot")]
+        seen_lower = {x.lower() for x in final}
+        add_spec("python-telegram-bot>=21.0")
+
+    # aiogram -> prefer >=3.0
+    if _present("aiogram"):
+        final = [x for x in final if not x.lower().startswith("aiogram")]
+        seen_lower = {x.lower() for x in final}
+        add_spec("aiogram>=3.0")
 
     # Sort for stability
     return sorted(final)
