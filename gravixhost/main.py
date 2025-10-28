@@ -841,9 +841,25 @@ async def handle_app_name(message: Message, state: FSMContext):
         plan = "premium" if user.get("is_premium") else "free"
         mark_started(pending.bot_record_id, plan, runtime_id or "")
         await message.answer(
-            f"✅ Success!\n\nBot: {name}\nFramework: {framework}\nStatus: Running\n\nUse /apps to view",
+            f"{bold('✅ Your bot is live!')}\n"
+            f"• Name: {bold(pending.bot_name or name or 'MyBot')}\n"
+            f"• ID: {code(pending.bot_record_id)}\n"
+            f"• Host Time: {'Unlimited (Premium Plan)' if plan == 'premium' else '1 Hour (Free Plan)'}\n"
+            "Use /stop to end early.",
+            reply_markup=main_menu(get_user(message.from_user.id).get('is_premium'), show_admin=is_admin(message.from_user.id)),
             parse_mode=ParseMode.HTML,
         )
+        # Ask for feedback and screenshots (keep old method UX)
+        feedback_text = (
+            bold("📸 Share Feedback") + "\n"
+            "Please send:\n"
+            "• A screenshot of your hosted bot running\n"
+            "• A screenshot of your current chat in GRAVIXVPS\n"
+            "• Your feedback about the platform (what did you like, what can be improved)\n\n"
+            "Submit your feedback and screenshots to our support bot: " + bold("@dravonnbot") + ".\n"
+            "Tap the button below to open the support chat."
+        )
+        await message.answer(feedback_text, reply_markup=support_url_kb(), parse_mode=ParseMode.HTML)
         await state.clear()
         return
 
