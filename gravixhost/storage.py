@@ -272,7 +272,9 @@ def register_referral(referrer_id: int, new_user_id: int) -> bool:
 
 
 def remove_premium(user_id: int):
-    update_user(user_id, is_premium=False, premium_expiry=None)
+    # Mark premium as deactivated by setting expiry to now and is_premium False
+    now = datetime.utcnow().isoformat()
+    update_user(user_id, is_premium=False, premium_expiry=now)
     log_event(f"Premium removed for {user_id}")
 
 

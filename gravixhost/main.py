@@ -185,13 +185,38 @@ async def cmd_myinfo(message: Message):
     referred_by = user.get("referred_by")
     referred_by_display = code(str(referred_by)) if referred_by else bold("None")
 
+    # Premium status details
+    from datetime import datetime
+    is_premium = bool(user.get("is_premium"))
+    expiry_dt = _safe_parse(user.get("premium_expiry"))
+    now = datetime.utcnow()
+    if is_premium and expiry_dt and now < expiry_dt:
+        plan_status = "Premium — Active"
+        expiry_text = bold(human_dt(expiry_dt))
+    elif is_premium and (not expiry_dt or now >= (expiry_dt or now)):
+        # Edge case: premium flag set but expiry missing/past
+        plan_status = "Premium — Expired"
+        expiry_text = bold(human_dt(expiry_dt))
+    else:
+        # Not premium
+        if expiry_dt and now >= expiry_dt:
+            plan_status = "Premium — Expired"
+            expiry_text = bold(human_dt(expiry_dt))
+        elif expiry_dt and now < expiry_dt:
+            # Deactivated before expiry
+            plan_status = "Premium — Deactivated"
+            expiry_text = bold(human_dt(expiry_dt))
+        else:
+            plan_status = "Free — No Premium"
+            expiry_text = bold(human_dt(None))
+
     text = (
         f"{bold('👤 User Info')}\n"
         f"• Name: {bold(message.from_user.full_name)}\n"
         f"• ID: {code(str(message.from_user.id))}\n"
-        f"• Status: {'Premium User' if user.get('is_premium') else 'Free User'}\n"
+        f"• Status: {plan_status}\n"
         f"• Hosted Bots: {len(get_user_bots(message.from_user.id))}\n"
-        f"• Plan Expiry: {bold(human_dt(_safe_parse(user.get('premium_expiry'))))}\n"
+        f"• Expiry: {expiry_text}\n"
         f"• Referrals: {bold(str(ref_count))}\n"
         f"• Referred By: {referred_by_display}\n"
     )
