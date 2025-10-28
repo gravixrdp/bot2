@@ -194,6 +194,10 @@ _PYPI_MAP = {
     "bs4": "beautifulsoup4",
     "yaml": "pyyaml",
     "Crypto": "pycryptodome",
+    "sklearn": "scikit-learn",
+    "httplib2": "httplib2",
+    "httpx": "httpx",
+    "aiohttp": "aiohttp",
     # Common mismatches / case variants
     "OpenSSL": "pyOpenSSL",
     "configparser": "configparser",
@@ -580,18 +584,141 @@ def build_and_run_from_code(
         return False, None, f"{str(e)[:200]}"
 
 
+def _read_text(path: str) -> Optional[str]:
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            return f.read()
+    except Exception:
+        return None
+
+
+def _parse_requirements_lines(text: str) -> List[str]:
+    """
+    Parse requirement-style lines, preserving version pins, handling -r includes lightly,
+    and skipping comments or obviously invalid placeholders.
+    """
+    if not text:
+        return []
+    reqs: List[str] = []
+    for raw in text.splitlines():
+        s = raw.strip()
+        if not s or s.startswith("#"):
+            continue
+        # Skip options commonly present in requirements files which we don't want to pass through
+        if s.startswith(("-", "--")):
+            # Handle -r otherfile.txt includes very simply: ignore here (workspace scanning will pick that file too)
+            if s.startswith("-r") or s.startswith("--requirement"):
+                continue
+            # Safety: skip unknown pip options to avoid breaking builds
+            continue
+        norm = _normalize_requirement(s)
+        if norm:
+            reqs.append(norm)
+    return reqs
+
+
+def _parse_pyproject(text: str) -> List[str]:
+    """
+    Extract dependencies from pyproject.toml for Poetry or PEP 621 projects.
+    Very light TOML parsing via regex to avoid extra deps.
+    """
+    if not text:
+        return []
+    reqs: List[str] = []
+    try:
+        # Poetry [tool.poetry.dependencies]
+        block = re.search(r"(?s)\\[tool\\.poetry\\.dependencies\\](.+?)(\\n\\[|\\Z)", text)
+        if block:
+            body = block.group(1)
+            for m in re.finditer(r"(?m)^\\s*([A-Za-z0-9_.+-]+)\\s*=\\s*['\"]?([^'\"\\n]+)['\"]?", body):
+                name = m.group(1)
+                ver = m.group(2).strip()
+                # Skip python itself
+                if name.lower() == "python":
+                    continue
+                spec = f"{name}{('==' + ver) if re.match(r'^\\d', ver) else ver if ver else ''}".strip()
+                norm = _normalize_requirement(spec) or _normalize_requirement(name)
+                if norm:
+                    reqs.append(norm)
+        # PEP 621 [project] dependencies = [...]
+        arr = re.search(r"(?s)\\[project\\][^\\[]*?dependencies\\s*=\\s*\\[(.+?)\\]", text)
+        if arr:
+            body = arr.group(1)
+            for m in re.finditer(r"['\"]([^'\"]+)['\"]", body):
+                spec = m.group(1).strip()
+                norm = _normalize_requirement(spec)
+                if norm:
+                    reqs.append(norm)
+    except Exception:
+        pass
+    return reqs
+
+
+def _parse_setup_cfg(text: str) -> List[str]:
+    """
+    Extract install_requires from setup.cfg.
+    """
+    if not text:
+        return []
+    reqs: List[str] = []
+    try:
+        block = re.search(r"(?s)\\[options\\](.+?)(\\n\\[|\\Z)", text)
+        if block:
+            body = block.group(1)
+            ir = re.search(r"(?s)install_requires\\s*=\\s*(.+?)(\\n\\w|\\Z)", body)
+            if ir:
+                lines = ir.group(1)
+                for raw in lines.splitlines():
+                    s = raw.strip().strip(",")
+                    if not s or s.startswith("#"):
+                        continue
+                    norm = _normalize_requirement(s)
+                    if norm:
+                        reqs.append(norm)
+    except Exception:
+        pass
+    return reqs
+
+
+def _parse_pipfile(text: str) -> List[str]:
+    """
+    Extract packages from Pipfile (TOML-like).
+    """
+    if not text:
+        return []
+    reqs: List[str] = []
+    try:
+        for section in ("\\[packages\\]", "\\[dev-packages\\]"):
+            block = re.search(rf"(?s){section}(.+?)(\\n\\[|\\Z)", text)
+            if block:
+                body = block.group(1)
+                for m in re.finditer(r"(?m)^\\s*([A-Za-z0-9_.+-]+)\\s*=\\s*['\"]?([^'\"\\n]+)['\"]?", body):
+                    name = m.group(1)
+                    ver = m.group(2).strip()
+                    spec = f\"{name}{('==' + ver) if re.match(r'^\\d', ver) else ver if ver else ''}\".strip()
+                    norm = _normalize_requirement(spec) or _normalize_requirement(name)
+                    if norm:
+                        reqs.append(norm)
+    except Exception:
+        pass
+    return reqs
+
+
 def detect_requirements(workspace: str) -> List[str]:
     """
-    Detect dependencies by parsing Python files with AST for import statements.
-    Fall back to regex scanning if AST fails anywhere.
-    Prefer to include user's requirements.txt (sanitized) so mismatches don't break builds.
+    Advanced dependency detection:
+    - Parse Python files via AST (fallback regex) to collect import roots.
+    - Read multiple manifest files: requirements*.txt, pyproject.toml, setup.cfg, Pipfile.
+    - Map common import aliases to PyPI names, preserving version pins from manifests.
+    - Filter stdlib/blacklisted modules and deduplicate.
     """
     import_names = set()
 
     def collect_imports_ast(py_path: str):
         try:
-            with open(py_path, "r", encoding="utf-8", errors="ignore") as f:
-                src = f.read()
+            src = _read_text(py_path)
+            if src is None:
+                return
             tree = ast.parse(src, filename=py_path)
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
@@ -609,9 +736,10 @@ def detect_requirements(workspace: str) -> List[str]:
             collect_imports_regex(py_path)
 
     def collect_imports_regex(py_path: str):
+        src = _read_text(py_path)
+        if not src:
+            return
         try:
-            with open(py_path, "r", encoding="utf-8", errors="ignore") as f:
-                src = f.read()
             # import x, import x as y, from x import y
             for m in re.finditer(r"(?m)^[ \t]*import[ \t]+([A-Za-z_][A-Za-z0-9_\.]*)", src):
                 base = m.group(1).split(".")[0]
@@ -624,45 +752,75 @@ def detect_requirements(workspace: str) -> List[str]:
         except Exception:
             pass
 
+    # Walk all python files
     for root, _, files in os.walk(workspace):
         for f in files:
             if f.endswith(".py"):
                 collect_imports_ast(os.path.join(root, f))
 
-    reqs = set()
+    # Requirements collected from manifests
+    reqs_from_manifests: List[str] = []
+    # requirements.txt + common variants
+    for filename in ("requirements.txt", "requirements.in", "requirements.dev.txt"):
+        path = os.path.join(workspace, filename)
+        if os.path.exists(path):
+            text = _read_text(path)
+            reqs_from_manifests += _parse_requirements_lines(text or "")
+
+    # pyproject.toml
+    pyproject_path = os.path.join(workspace, "pyproject.toml")
+    if os.path.exists(pyproject_path):
+        reqs_from_manifests += _parse_pyproject(_read_text(pyproject_path) or "")
+
+    # setup.cfg
+    setup_cfg_path = os.path.join(workspace, "setup.cfg")
+    if os.path.exists(setup_cfg_path):
+        reqs_from_manifests += _parse_setup_cfg(_read_text(setup_cfg_path) or "")
+
+    # Pipfile
+    pipfile_path = os.path.join(workspace, "Pipfile")
+    if os.path.exists(pipfile_path):
+        reqs_from_manifests += _parse_pipfile(_read_text(pipfile_path) or "")
+
     # Map imports to PyPI names
+    reqs_from_imports: List[str] = []
     for base in import_names:
         norm = _normalize_requirement(base)
         if norm:
-            reqs.add(norm)
+            reqs_from_imports.append(norm)
 
-    # Prefer to include user's requirements.txt with light validation
-    req_path = os.path.join(workspace, "requirements.txt")
-    if os.path.exists(req_path):
-        try:
-            with open(req_path, "r", encoding="utf-8", errors="ignore") as f:
-                for line in f:
-                    s = line.strip()
-                    if not s or s.startswith("#"):
-                        continue
-                    # Normalize/validate the requirement line; skip obvious placeholders
-                    norm = _normalize_requirement(s)
-                    if norm:
-                        reqs.add(norm)
-        except Exception:
-            pass
-    else:
-        # If no requirements.txt, ensure common framework packages are included based on imports
-        # telebot -> pyTelegramBotAPI, telegram -> python-telegram-bot, etc. (handled by _normalize_requirement above)
-        pass
-
-    # Ensure explicit mappings for detected frameworks are present, even if not imported at top-level
+    # Framework-specific ensures
     if "telebot" in import_names:
-        reqs.add("pyTelegramBotAPI")
+        reqs_from_imports.append("pyTelegramBotAPI")
     if "telegram" in import_names:
-        reqs.add("python-telegram-bot>=21.0")
+        # Pin PTB to >=21 for new APIs
+        reqs_from_imports.append("python-telegram-bot>=21.0")
+    if "aiogram" in import_names:
+        # Prefer aiogram>=3 unless legacy v2 is detected elsewhere
+        reqs_from_imports.append("aiogram>=3.0")
 
-    return sorted(reqs)
+    # Merge and deduplicate, preserving pins from manifests where available
+    final: List[str] = []
+    seen_lower = set()
+
+    def add_spec(spec: str):
+        s = (spec or "").strip()
+        if not s:
+            return
+        key = s.lower()
+        if key not in seen_lower:
+            final.append(s)
+            seen_lower.add(key)
+
+    # Manifests first (more authoritative)
+    for r in reqs_from_manifests:
+        add_spec(r)
+    # Then imports-based guesses
+    for r in reqs_from_imports:
+        add_spec(r)
+
+    # Sort for stability
+    return sorted(final)
 
 
 def write_runner_and_dockerfile(workspace: str, entry: Optional[str] = None, requirements: Optional[List[str]] = None):
