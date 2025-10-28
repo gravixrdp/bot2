@@ -745,10 +745,10 @@ def _parse_pipfile(text: str) -> List[str]:
             block = re.search(rf"(?s){section}(.+?)(\\n\\[|\\Z)", text)
             if block:
                 body = block.group(1)
-                for m in re.finditer(r"(?m)^\\s*([A-Za-z0-9_.+-]+)\\s*=\\s*['\"]?([^'\"\\n]+)['\"]?", body):
+                for m in re.finditer(r"(?m)^\\s*([A-Za-z0-9_.+-]+)\\s*=\\s*['\\\"]?([^'\\\"\\n]+)['\\\"]?", body):
                     name = m.group(1)
                     ver = m.group(2).strip()
-                    spec = f"{name}{('==' + ver) if re.match(r'^\\d', ver) else ver if ver else ''}".strip()"{name}{('==' + ver) if re.match(r'^\\d', ver) else ver if ver else ''}\".strip()
+                    spec = f"{name}{('==' + ver) if re.match(r'^\\d', ver) else ver if ver else ''}".strip()
                     norm = _normalize_requirement(spec) or _normalize_requirement(name)
                     if norm:
                         reqs.append(norm)
