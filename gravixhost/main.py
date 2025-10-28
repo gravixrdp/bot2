@@ -62,12 +62,37 @@ async def cmd_start(message: Message):
         name=message.from_user.full_name,
         username=message.from_user.username
     )
+    # Professional welcome message in the requested box-style format (Free plan)
+    from .keyboards import channel_join_kb
     welcome = (
-        f"✨ Welcome to {bold(APP_NAME)}\n"
-        f"Host your Telegram bot in a secure, isolated environment.\n\n"
-        f"Choose an option below:"
+        "╔═══════════════════════╗\n"
+        "    🌟 WELCOME TO GRAVIXVPSBOT 🌟\n"
+        "╚═══════════════════════╝\n\n"
+        f"👋 Welcome {message.from_user.first_name or 'User'}!\n"
+        f"🆔 Your ID: {code(str(message.from_user.id))}\n"
+        "💎 Account: Free 🆓\n"
+        "⏱️ Hosting Limit: 1 bot • Uptime: 1 hour\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "🎯 FREE USER FEATURES:\n\n"
+        "📦 Host My Bot — Upload your bot (.py or .zip)\n"
+        "📘 How it Works — Step-by-step hosting guide\n"
+        "⚙️ Manage My Bots — View, stop, restart, remove\n"
+        "📜 Bot Logs — See logs for a specific bot\n"
+        "🧾 My Logs — Recent system activity\n"
+        "👤 My Info — Your account and usage\n"
+        "🆘 Support — Contact support\n"
+        "💰 Upgrade to Premium — Get unlimited uptime\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "✨ Start exploring now! ✨\n"
     )
-    await message.answer(welcome, reply_markup=main_menu(user.get("is_premium"), show_admin=is_admin(message.from_user.id)), parse_mode=ParseMode.HTML)
+    # First send the welcome with an inline "Join Channel" button
+    await message.answer(welcome, reply_markup=channel_join_kb(), parse_mode=ParseMode.HTML)
+    # Then show the main menu so the reply keyboard is available
+    await message.answer(
+        bold("🏠 Main Menu"),
+        reply_markup=main_menu(user.get("is_premium"), show_admin=is_admin(message.from_user.id)),
+        parse_mode=ParseMode.HTML,
+    )
 
 
 @router.message(Command("help"))

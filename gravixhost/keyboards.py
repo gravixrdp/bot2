@@ -145,6 +145,14 @@ def support_url_kb() -> InlineKeyboardMarkup:
         ]
     )
 
+def channel_join_kb() -> InlineKeyboardMarkup:
+    # Inline button to join the official channel
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Join Channel", url="https://t.me/GravixRDP")]
+        ]
+    )
+
 
 def bots_action_list(bots, action_text: str, prefix: str) -> InlineKeyboardMarkup:
     """
