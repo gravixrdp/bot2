@@ -87,24 +87,34 @@ async def cmd_start(message: Message):
     from .keyboards import channel_join_kb
     is_premium = bool(get_user(message.from_user.id).get("is_premium"))
 
+    # Compute accurate plan status and expiry label
+    from datetime import datetime
+    exp_str = get_user(message.from_user.id).get("premium_expiry")
+    try:
+        exp_dt = datetime.fromisoformat(exp_str) if exp_str else None
+    except Exception:
+        exp_dt = None
+    now = datetime.utcnow()
+    if is_premium and exp_dt and now < exp_dt:
+        plan_status = "Premium — Active"
+        expiry_label = bold(human_dt(exp_dt))
+    elif is_premium and (not exp_dt or now >= (exp_dt or now)):
+        plan_status = "Premium — Expired"
+        expiry_label = "Expired"
+    else:
+        plan_status = "Free 🆓"
+        expiry_label = "Not Applicable"
+
     if is_premium:
         # Premium-styled welcome (high level, same header design)
-        from datetime import datetime
-        expiry_text = ""
-        try:
-            exp = get_user(message.from_user.id).get("premium_expiry")
-            expiry_text = bold(human_dt(datetime.fromisoformat(exp))) if exp else "Not set"
-        except Exception:
-            expiry_text = "Not set"
-
         welcome = (
             "╔═══════════════════════╗\n"
             "    🌟 WELCOME TO GRAVIXVPSBOT 🌟\n"
             "╚═══════════════════════╝\n\n"
             f"👋 Welcome {message.from_user.first_name or 'User'}!\n"
             f"🆔 Your ID: {code(str(message.from_user.id))}\n"
-            "💎 Plan: Premium — Active\n"
-            f"📅 Expires on: {expiry_text}\n\n"
+            f"💎 Plan: {plan_status}\n"
+            f"📅 Expiry: {expiry_label}\n\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
             "🔥 PREMIUM FEATURES:\n\n"
             "⏱️ Unlimited Uptime — your bots stay online\n"
