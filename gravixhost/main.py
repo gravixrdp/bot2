@@ -25,6 +25,7 @@ from .storage import (
     mark_stopped,
     get_active_bots,
     get_user_bots,
+    register_referral,
 )
 from .services.hoster import save_upload, build_and_run, remove_workspace
 from .services.scheduler import Scheduler
@@ -62,12 +63,91 @@ async def cmd_start(message: Message):
         name=message.from_user.full_name,
         username=message.from_user.username
     )
-    welcome = (
-        f"✨ Welcome to {bold(APP_NAME)}\n"
-        f"Host your Telegram bot in a secure, isolated environment.\n\n"
-        f"Choose an option below:"
+
+    # Handle referral payload: /start ref_<user_id>
+    try:
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) > 1 and parts[1].strip().lower().startswith("ref_"):
+            ref_id_str = parts[1].strip()[4:]
+            ref_id = int(ref_id_str)
+            if register_referral(referrer_id=ref_id, new_user_id=message.from_user.id):
+                # Notify referrer about their reward
+                try:
+                    await message.bot.send_message(
+                        chat_id=ref_id,
+                        text=bold("🎉 Referral bonus!") + "\nYou earned +1 day of Premium for inviting a new user.",
+                        parse_mode=ParseMode.HTML,
+                    )
+                except Exception:
+                    pass
+    except Exception:
+        # Ignore malformed payloads
+        pass
+
+    from .keyboards import channel_join_kb
+    is_premium = bool(get_user(message.from_user.id).get("is_premium"))
+
+    if is_premium:
+        # Premium-styled welcome (high level, same header design)
+        from datetime import datetime
+        expiry_text = ""
+        try:
+            exp = get_user(message.from_user.id).get("premium_expiry")
+            expiry_text = bold(human_dt(datetime.fromisoformat(exp))) if exp else "Not set"
+        except Exception:
+            expiry_text = "Not set"
+
+        welcome = (
+            "╔═══════════════════════╗\n"
+            "    🌟 WELCOME TO GRAVIXVPSBOT 🌟\n"
+            "╚═══════════════════════╝\n\n"
+            f"👋 Welcome {message.from_user.first_name or 'User'}!\n"
+            f"🆔 Your ID: {code(str(message.from_user.id))}\n"
+            "💎 Plan: Premium — Active\n"
+            f"📅 Expires on: {expiry_text}\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "🔥 PREMIUM FEATURES:\n\n"
+            "⏱️ Unlimited Uptime — your bots stay online\n"
+            "🤖 Multiple Bots — host more than one bot\n"
+            "💬 Priority Support — access Contact Admin\n"
+            "⚙️ Manage My Bots — view, stop, restart, remove\n"
+            "📜 Bot & System Logs — inspect recent activity\n"
+            "👤 My Info — account and usage overview\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "✨ Welcome aboard — enjoy premium capabilities! ✨\n"
+        )
+    else:
+        # Professional welcome message in the requested box-style format (Free plan)
+        welcome = (
+            "╔═══════════════════════╗\n"
+            "    🌟 WELCOME TO GRAVIXVPSBOT 🌟\n"
+            "╚═══════════════════════╝\n\n"
+            f"👋 Welcome {message.from_user.first_name or 'User'}!\n"
+            f"🆔 Your ID: {code(str(message.from_user.id))}\n"
+            "💎 Account: Free 🆓\n"
+            "⏱️ Hosting Limit: 1 bot • Uptime: 1 hour\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "🎯 FREE USER FEATURES:\n\n"
+            "📦 Host My Bot — Upload your bot (.py or .zip)\n"
+            "📘 How it Works — Step-by-step hosting guide\n"
+            "⚙️ Manage My Bots — View, stop, restart, remove\n"
+            "📜 Bot Logs — See logs for a specific bot\n"
+            "🧾 My Logs — Recent system activity\n"
+            "👤 My Info — Your account and usage\n"
+            "🆘 Support — Contact support\n"
+            "💰 Upgrade to Premium — Get unlimited uptime\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "✨ Start exploring now! ✨\n"
+        )
+
+    # Send welcome with channel join button
+    await message.answer(welcome, reply_markup=channel_join_kb(), parse_mode=ParseMode.HTML)
+    # Then show the main menu so the reply keyboard is available
+    await message.answer(
+        bold("🏠 Main Menu"),
+        reply_markup=main_menu(is_premium, show_admin=is_admin(message.from_user.id)),
+        parse_mode=ParseMode.HTML,
     )
-    await message.answer(welcome, reply_markup=main_menu(user.get("is_premium"), show_admin=is_admin(message.from_user.id)), parse_mode=ParseMode.HTML)
 
 
 @router.message(Command("help"))
@@ -100,6 +180,11 @@ async def any_back(message: Message, state: FSMContext):
 @router.message(Command("myinfo"))
 async def cmd_myinfo(message: Message):
     user = get_user(message.from_user.id)
+    # Referral stats
+    ref_count = int(user.get("referral_count") or 0)
+    referred_by = user.get("referred_by")
+    referred_by_display = code(str(referred_by)) if referred_by else bold("None")
+
     text = (
         f"{bold('👤 User Info')}\n"
         f"• Name: {bold(message.from_user.full_name)}\n"
@@ -107,6 +192,8 @@ async def cmd_myinfo(message: Message):
         f"• Status: {'Premium User' if user.get('is_premium') else 'Free User'}\n"
         f"• Hosted Bots: {len(get_user_bots(message.from_user.id))}\n"
         f"• Plan Expiry: {bold(human_dt(_safe_parse(user.get('premium_expiry'))))}\n"
+        f"• Referrals: {bold(str(ref_count))}\n"
+        f"• Referred By: {referred_by_display}\n"
     )
     await message.answer(text, reply_markup=main_menu(user.get("is_premium"), show_admin=is_admin(message.from_user.id)), parse_mode=ParseMode.HTML)
 
@@ -308,6 +395,39 @@ async def on_support(message: Message):
         reply_markup=support_url_kb(),
         parse_mode=ParseMode.HTML,
     )
+
+@router.message(F.text == "🎁 Referral")
+async def on_referral(message: Message):
+    # Build user's unique referral link: t.me/<bot_username>?start=ref_<user_id>
+    try:
+        me = await message.bot.get_me()
+        bot_username = me.username or "GRAVIXVPSBOT"
+    except Exception:
+        bot_username = "GRAVIXVPSBOT"
+    ref_url = f"https://t.me/{bot_username}?start=ref_{message.from_user.id}"
+
+    # Professional referral message (box-style)
+    text = (
+        "╔═══════════════════════╗\n"
+        "    🎁 REFERRAL PROGRAM 🌟\n"
+        "╚═══════════════════════╝\n\n"
+        f"👋 Hello {message.from_user.first_name or 'User'}!\n"
+        "Invite friends and earn Premium time automatically.\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "📏 How it works:\n"
+        "• 1 referral = +1 day Premium access\n"
+        "• 2 referrals = +2 days Premium access\n"
+        "• Rewards stack automatically — no manual steps\n\n"
+        "📎 Your referral link:\n"
+        f"{code(ref_url)}\n\n"
+        "Tip: Tap the Share button below to send your link.\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "✅ When a new user starts the bot using your link, you instantly get +1 day Premium.\n"
+    )
+    # Inline keyboard: open link + share referral (prefilled)
+    from .keyboards import referral_share_kb
+    share_text = "I'm using GRAVIXVPSBOT for hosting Telegram bots — it's reliable and easy to use. Join using my referral link:"
+    await message.answer(text, reply_markup=referral_share_kb(ref_url, share_text), parse_mode=ParseMode.HTML)
 
 
 @router.message(F.text == "⚙️ Manage My Bots")

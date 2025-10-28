@@ -84,10 +84,12 @@ async def admin_users_msg(message: Message):
     for u in users:
         apps_count = len(get_user_bots(u["id"]))
         display_name = _format_user_display(u)
+        referrals = int((u.get("referral_count") or 0))
         text.append(
             f"• {bold(display_name)} — ID {code(str(u['id']))} — "
             f"Status: {'Premium' if u.get('is_premium') else 'Free'} — "
             f"Apps: {bold(str(apps_count))} — "
+            f"Referrals: {bold(str(referrals))} — "
             f"Expiry: {human_dt(_safe_parse(u.get('premium_expiry')))}"
         )
     await message.answer("\n".join(text), reply_markup=admin_menu(), parse_mode=ParseMode.HTML)
@@ -457,20 +459,39 @@ async def premium_set(message: Message):
         reply_markup=admin_menu(),
     )
 
-    # Notify the target user
+    # Notify the target user with a premium-styled welcome
     try:
         from datetime import datetime
+        from .keyboards import channel_join_kb
         updated = get_user(user_id)
         expiry_str = updated.get("premium_expiry")
         expiry_text = human_dt(datetime.fromisoformat(expiry_str)) if expiry_str else "Not set"
+
+        premium_msg = (
+            "╔═══════════════════════╗\n"
+            "    🌟 WELCOME TO GRAVIXVPSBOT 🌟\n"
+            "╚═══════════════════════╝\n\n"
+            f"👋 Welcome {updated.get('name') or 'User'}!\n"
+            f"🆔 Your ID: {code(str(user_id))}\n"
+            "💎 Plan: Premium — Active\n"
+            f"📅 Expires on: {bold(expiry_text)}\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "🔥 PREMIUM FEATURES:\n\n"
+            "⏱️ Unlimited Uptime — your bots stay online\n"
+            "🤖 Multiple Bots — host more than one bot\n"
+            "💬 Priority Support — access Contact Admin\n"
+            "⚙️ Manage My Bots — view, stop, restart, remove\n"
+            "📜 Bot & System Logs — inspect recent activity\n"
+            "👤 My Info — account and usage overview\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "✨ Welcome aboard — enjoy premium capabilities! ✨\n"
+        )
+
+        # Send the premium welcome with a channel join button
         await message.bot.send_message(
             chat_id=user_id,
-            text=(
-                "🎉 " + str(bold("Premium Activated")) + "\n"
-                f"• Duration: {bold(str(days))} days\n"
-                f"• Expires on: {bold(expiry_text)}\n"
-                "Enjoy unlimited uptime and premium features!"
-            ),
+            text=premium_msg,
+            reply_markup=channel_join_kb(),
             parse_mode=ParseMode.HTML,
         )
     except Exception:
@@ -486,6 +507,33 @@ async def premium_remove(message: Message):
     user_id = int(parts[1])
     remove_premium(user_id)
     await message.answer(f"✅ Premium removed for {code(str(user_id))}.", parse_mode=ParseMode.HTML, reply_markup=admin_menu())
+
+    # Notify the target user about deactivation
+    try:
+        from .keyboards import support_url_kb
+        u = get_user(user_id)
+        display_name = u.get("name") or "User"
+        deact_msg = (
+            "╔═══════════════════════╗\n"
+            "    🌟 WELCOME TO GRAVIXVPSBOT 🌟\n"
+            "╚═══════════════════════╝\n\n"
+            f"👋 Hello {display_name}!\n"
+            f"🆔 Your ID: {code(str(user_id))}\n"
+            "💎 Plan: Premium — Deactivated\n"
+            "📅 Expiry: Expired\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "Your premium has been deactivated. You can continue using the Free plan.\n\n"
+            "To restore Premium (unlimited uptime, multi-bot hosting, priority support), contact us below.\n"
+        )
+        await message.bot.send_message(
+            chat_id=user_id,
+            text=deact_msg,
+            reply_markup=support_url_kb(),
+            parse_mode=ParseMode.HTML,
+        )
+    except Exception:
+        # Silent if user cannot be messaged
+        pass
 
 
 @router.message(F.text.regexp(r"^stopbot\s+\S+$"))
@@ -613,10 +661,12 @@ async def admin_users(cb: CallbackQuery):
     for u in enriched:
         display_name = _format_user_display(u)
         apps_count = len(get_user_bots(u["id"]))
+        referrals = int((u.get("referral_count") or 0))
         text.append(
             f"• {bold(display_name)} — ID {code(str(u['id']))} — "
             f"Status: {'Premium' if u.get('is_premium') else 'Free'} — "
             f"Apps: {bold(str(apps_count))} — "
+            f"Referrals: {bold(str(referrals))} — "
             f"Expiry: {human_dt(_safe_parse(u.get('premium_expiry')))}"
         )
     await cb.message.answer("\n".join(text), reply_markup=admin_fixed_bar(), parse_mode=ParseMode.HTML)
