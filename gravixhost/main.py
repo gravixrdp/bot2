@@ -426,7 +426,7 @@ async def on_referral(message: Message):
     )
     # Inline keyboard: open link + share referral (prefilled)
     from .keyboards import referral_share_kb
-    share_text = "Join GRAVIXVPSBOT — host Telegram bots. Use my referral to get started:"
+    share_text = "I'm using GRAVIXVPSBOT for hosting Telegram bots — it's reliable and easy to use. Join using my referral link:"
     await message.answer(text, reply_markup=referral_share_kb(ref_url, share_text), parse_mode=ParseMode.HTML)
 
 
