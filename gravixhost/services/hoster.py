@@ -105,7 +105,7 @@ class _TokenRewriter(ast.NodeTransformer):
                         node.args[0] = self._env_expr()
                 for kw in node.keywords or []:
                     if kw.arg and kw.arg.lower() == "token":
-                        node.value = self._env_expr()
+                        kw.value = self._env_expr()
 
             # Bot(...), TeleBot(...), Client(...): positional 0 or keyword 'token'
             func_name = None
@@ -767,8 +767,9 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
         image_tag = f"hostbot_{user_id}_{bot_id}_{int(time.time())}".lower().replace(" ", "_").replace("-", "_")
         container_name = f"hostbot_{user_id}_{bot_id}_{int(time.time())}".lower().replace(" ", "_").replace("-", "_")
 
-        # Build image (explicitly_event(f"Building image {image_tag} for {bot_id}")
-        client.images.build(path=temp_dir, tag=image_tag, rm=True, timeout=BUILD_TIMEOUT_SECS)
+        # Build image
+        # Note: docker-py build() doesn't accept a 'timeout' kw in some versions; omit to avoid TypeError
+        client.images.build(path=temp_dir, tag=image_tag, rm=True)
 
         # Ensure network exists or use default bridge
         network = RUNTIME_NETWORK

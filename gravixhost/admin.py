@@ -89,11 +89,12 @@ async def admin_users_msg(message: Message):
         referrals = int((u.get("referral_count") or 0))
         exp_dt = _safe_parse(u.get("premium_expiry"))
         is_prem = bool(u.get("is_premium"))
-        if is_prem and exp_dt and now < exp_dt:
+        if is_prem and exp_dt and now &lt; exp_dt:
             expiry_text = f"Active until {human_dt(exp_dt)}"
-        elif exp_dt:
+        elif is_prem and exp_dt:
             expiry_text = f"Expired on {human_dt(exp_dt)}"
         else:
+            # For non-premium users, do not show any stored expiry
             expiry_text = "Not Applicable"
         text.append(
             f"• {bold(display_name)} — ID {code(str(u['id']))} — "
