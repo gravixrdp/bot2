@@ -194,10 +194,12 @@ _PYP _MAP = {
         'cv2': 'opencv-python',
         'bs4': 'beautifulsoup4',
         'yaml': 'pyyaml',
-        'Crypto': 'pyCrypto': 'pycryptodome',
+        'Crypto': 'pycryptodome',
         'OpenSSL': 'pyOpenSSL',
  _code  new </}
 ,
+    "yaml": "pyyaml",
+    "Crypto": "pycryptodome",
     # Common mismatches / case variants
     "OpenSSL": "pyOpenSSL",
     "configparser": "configparser",
