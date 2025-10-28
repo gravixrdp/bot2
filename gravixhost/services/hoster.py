@@ -846,23 +846,7 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
                     client.api.remove_container(runtime_id, force=True)
                 except Exception:
                     pass
-                return False, None, f"runtime_error: {msg}"atus != "running":
-                logs = get_runtime_logs(runtime_id, tail=100) or ""
-                # Extract a concise error line
-                short_err = ""
-                for line in (logs.splitlines() if logs else []):
-                    if "Traceback" in line or "SyntaxError" in line or "Error" in line or "Exception" in line:
-                        short_err = line.strip()
-                        break
-                if not short_err and logs:
-                    short_err = logs.splitlines()[-1].strip()
-                log_event(f"Runtime crashed {runtime_id} for {bot_id}: {short_err or 'see container logs'}")
-                # Stop and remove failed container
-                try:
-                    client.api.remove_container(runtime_id, force=True)
-                except Exception:
-                    pass
-                return False, None, f"runtime_error: {short_err or 'container exited'}"
+                return False, None, f"runtime_error: {msg}"
         except Exception:
             # If health check fails, proceed with success but logs will show details
             pass
