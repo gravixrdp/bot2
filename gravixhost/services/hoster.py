@@ -247,22 +247,43 @@ def rewrite_token_in_code(code: str, env_keys: Optional[List[str]] = None, candi
 # ---- Requirements normalization and detection ---------------------------------
 
 def _normalize_requirement(name: str) -> Optional[str]:
+    """
+    Normalize an import/module name or raw requirement line to a PyPI-installable requirement.
+    - Filters out stdlib and meta modules that should not be installed
+    - Maps common aliases to real PyPI package names
+    - Skips vague namespaces like 'google' (we add specific sdk like google-genai separately)
+    """
     if not name:
         return None
     s = name.strip()
     if not s or s.startswith("#"):
         return None
+    # Skip obvious templating placeholders
     if "%(" in s and ")s" in s:
         return None
+    # Spaces in requirement lines are usually invalid
     if " " in s:
         return None
+    # Already a requirement spec
     for sep in ("==", ">=", "<=", "~=", ">", "<", "!="):
         if sep in s:
             return s
     base = s.split(".")[0]
-    _BLACKLIST = {"os", "sys", "json", "re", "time", "pathlib", "typing", "dataclasses"}
+    # Broad stdlib blacklist and meta names
+    _BLACKLIST = {
+        # Python stdlib and meta modules (common)
+        "os", "sys", "json", "re", "time", "pathlib", "typing", "dataclasses", "asyncio",
+        "base64", "io", "logging", "sqlite3", "subprocess", "signal",
+        "datetime", "collections", "functools", "itertools", "math", "random", "hashlib",
+        "hmac", "threading", "multiprocessing", "http", "email", "urllib", "traceback",
+        "argparse", "enum", "types", "contextlib", "tempfile", "zipfile", "tarfile",
+        "shutil", "glob", "fnmatch", "importlib", "inspect",
+        # Generic/vague namespaces to skip (handled via specific packages elsewhere)
+        "google",
+    }
     if base.startswith("_") or base in _BLACKLIST:
         return None
+    # Map common aliases to PyPI packages
     _PYPI_MAP = {
         "telebot": "pyTelegramBotAPI",
         "telegram": "python-telegram-bot",
