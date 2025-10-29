@@ -20,15 +20,6 @@ from .ai_assistant import suggest_fix
 def collect_token_vars(workspace: str) -> List[str]:
     """
     Scan all .py files to collect likely token variable names and env keys.
-
-    We look for:
-    - Assignments to string literals that look like Telegram tokens (123456:ABC-DEF...)
-    - Assignments using os.getenv("NAME")
-    - Constructor calls where a Name is passed as token: Updater(...), Bot(...), TeleBot(...), Client(...)
-    - ApplicationBuilder().token(NAME)
-    - Common name patterns like TOKEN, BOT_TOKEN, TELEGRAM_TOKEN, TELEGRAM_BOT_TOKEN, API_TOKEN, MY_BOT_TOKEN
-
-    Returns a deduplicated list of names to set in runner globals and env.
     """
     candidates: List[str] = []
     def _add(name: Optional[str]):
@@ -58,19 +49,16 @@ def collect_token_vars(workspace: str) -> List[str]:
                 except Exception:
                     tree = None
 
-                # AST-based search
                 if tree:
                     for node in ast.walk(tree):
                         try:
                             if isinstance(node, ast.Assign) and node.targets:
                                 target = node.targets[0]
                                 var_name = target.id if isinstance(target, ast.Name) else None
-                                # string literal
                                 if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
                                     s = node.value.value
                                     if re.match(r"^[0-9]+:[A-Za-z0-9_-]+$", s):
                                         _add(var_name)
-                                # getenv
                                 elif isinstance(node.value, ast.Call):
                                     func = node.value.func
                                     if isinstance(func, ast.Attribute) and func.attr == "getenv":
@@ -81,15 +69,12 @@ def collect_token_vars(workspace: str) -> List[str]:
                                         if node.value.args and isinstance(node.value.args[0], ast.Constant) and isinstance(node.value.args[0].value, str):
                                             _add(node.value.args[0].value)
                                             _add(var_name)
-
-                            # Constructor calls
                             if isinstance(node, ast.Call):
                                 func_name = None
                                 if isinstance(node.func, ast.Name):
                                     func_name = node.func.id
                                 elif isinstance(node.func, ast.Attribute):
                                     func_name = node.func.attr
-
                                 if func_name in {"Updater", "Bot", "TeleBot", "Client"}:
                                     tok_expr = None
                                     if node.args:
@@ -100,8 +85,6 @@ def collect_token_vars(workspace: str) -> List[str]:
                                             break
                                     if isinstance(tok_expr, ast.Name):
                                         _add(tok_expr.id)
-
-                                # ApplicationBuilder().token(NAME)
                                 if isinstance(node.func, ast.Attribute) and node.func.attr == "token":
                                     if node.args:
                                         arg0 = node.args[0]
@@ -109,17 +92,13 @@ def collect_token_vars(workspace: str) -> List[str]:
                                             _add(arg0.id)
                         except Exception:
                             pass
-
-                # Regex fallbacks
                 try:
                     for m in re.finditer(r"([A-Za-z_]\w*)\s*=\s*['\"]([0-9]+:[A-Za-z0-9_-]+)['\"]", src):
                         _add(m.group(1))
                     for m in re.finditer(r"os\.getenv\(\s*['\"]([A-Za-z_]\w*)['\"]\s*\)", src):
                         _add(m.group(1))
-                    # Updater/Bot variable names by regex (positional)
                     for m in re.finditer(r"(?:Updater|Bot|TeleBot|Client)\s*\(\s*([A-Za-z_]\w*)\s*[\),]", src):
                         _add(m.group(1))
-                    # ApplicationBuilder().token(NAME)
                     for m in re.finditer(r"ApplicationBuilder\(\)\.token\(\s*([A-Za-z_]\w*)\s*\)", src):
                         _add(m.group(1))
                 except Exception:
@@ -127,11 +106,9 @@ def collect_token_vars(workspace: str) -> List[str]:
     except Exception:
         pass
 
-    # Common variants
     for common in ["TOKEN", "BOT_TOKEN", "TELEGRAM_TOKEN", "TELEGRAM_BOT_TOKEN", "API_TOKEN", "MY_BOT_TOKEN", "TG_TOKEN"]:
         _add(common)
 
-    # Deduplicate preserving order
     uniq = []
     seen = set()
     for n in candidates:
@@ -144,13 +121,8 @@ def collect_token_vars(workspace: str) -> List[str]:
 
 _ENV_KEYS_DEFAULT = ["TELEGRAM_TOKEN", "BOT_TOKEN", "TOKEN", "TELEGRAM_BOT_TOKEN"]
 
-
 def _env_read_expr(env_keys: List[str]) -> ast.AST:
-    """
-    Build AST expression: os.getenv(k1) or os.getenv(k2) or ... or ""
-    """
     keys = env_keys or _ENV_KEYS_DEFAULT
-    # os.getenv(keys[0])
     expr: ast.AST = ast.Call(
         func=ast.Attribute(value=ast.Name(id="os", ctx=ast.Load()), attr="getenv", ctx=ast.Load()),
         args=[ast.Constant(value=keys[0])],
@@ -168,18 +140,11 @@ def _env_read_expr(env_keys: List[str]) -> ast.AST:
                 ),
             ],
         )
-    # Fallback empty string
     expr = ast.BoolOp(op=ast.Or(), values=[expr, ast.Constant(value="")])
     return expr
 
 
 class _TokenRewriter(ast.NodeTransformer):
-    """
-    Rewrites token assignments and constructor arguments to read from environment.
-    - VAR = "123456:ABC-DEF..."  -> VAR = os.getenv(...) or ""
-    - VAR = "YOUR_BOT_TOKEN_HERE" -> VAR = os.getenv(...) or VAR
-    - Bot(VAR) / Bot(token=VAR) / ApplicationBuilder().token(VAR) -> token env-read
-    """
     def __init__(self, env_keys: Optional[List[str]] = None, candidate_vars: Optional[List[str]] = None):
         super().__init__()
         self.env_keys = env_keys or _ENV_KEYS_DEFAULT
@@ -189,10 +154,8 @@ class _TokenRewriter(ast.NodeTransformer):
     def _is_token_literal(self, s: str) -> bool:
         if not isinstance(s, str):
             return False
-        # Exact token-like pattern
         if re.match(r"^[0-9]+:[A-Za-z0-9_-]+$", s):
             return True
-        # Common placeholders
         low = s.lower()
         return "bot_token" in low or "token" in low or "your_bot_token" in low
 
@@ -204,12 +167,10 @@ class _TokenRewriter(ast.NodeTransformer):
         try:
             target = node.targets[0]
             var_name = target.id if isinstance(target, ast.Name) else None
-            # Replace assignment to candidate or literal tokens
             if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
                 if self._is_token_literal(node.value.value) or (var_name and var_name in self.candidate_vars):
                     return ast.Assign(targets=node.targets, value=self._env_expr())
             if var_name and var_name in self.candidate_vars and isinstance(node.value, ast.Call):
-                # VAR = getenv(...)
                 if isinstance(node.value.func, ast.Attribute) and node.value.func.attr == "getenv":
                     return ast.Assign(targets=node.targets, value=self._env_expr())
                 if isinstance(node.value.func, ast.Name) and node.value.func.id == "getenv":
@@ -220,7 +181,6 @@ class _TokenRewriter(ast.NodeTransformer):
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         try:
-            # ApplicationBuilder().token(ARG)
             if isinstance(node.func, ast.Attribute) and node.func.attr == "token":
                 if node.args:
                     arg0 = node.args[0]
@@ -232,13 +192,12 @@ class _TokenRewriter(ast.NodeTransformer):
                     if kw.arg and kw.arg.lower() == "token":
                         kw.value = self._env_expr()
 
-            # Bot(...), TeleBot(...), Client(...): positional 0 or keyword 'token'
             func_name = None
             if isinstance(node.func, ast.Name):
                 func_name = node.func.id
             elif isinstance(node.func, ast.Attribute):
                 func_name = node.func.attr
-            if func_name in {"Bot", "TeleBot", "Client"}:
+            if func_name in {"Bot", "TeleBot", "Client", "Updater"}:
                 if node.args:
                     arg0 = node.args[0]
                     if isinstance(arg0, ast.Constant) and isinstance(arg0.value, str) and self._is_token_literal(arg0.value):
@@ -258,14 +217,7 @@ class _TokenRewriter(ast.NodeTransformer):
 
 
 def _fix_common_syntax_issues(code: str) -> str:
-    """
-    Heuristic fixes for common user-code syntax issues that prevent AST parsing.
-    - f-strings with single-quoted outer string and dict-key access inside braces:
-      f'Something {d['key']}' -> f"Something {d['key']}"
-    Only applies to single-line literals to avoid overreach.
-    """
     try:
-        # Replace occurrences where an f'...{...['...']...}...' is present on a single line
         pattern = re.compile(r"""f'([^'\n]*\{[^}\n]*\[[\"'][^]\n]*\][^}\n]*\}[^'\n]*)'""")
         return pattern.sub(r'f"\1"', code)
     except Exception:
@@ -273,11 +225,6 @@ def _fix_common_syntax_issues(code: str) -> str:
 
 
 def rewrite_token_in_code(code: str, env_keys: Optional[List[str]] = None, candidate_vars: Optional[List[str]] = None) -> str:
-    """
-    Return a modified code string with token reads redirected to environment.
-    Ensures 'import os' exists if needed.
-    """
-    # Pre-fix common syntax issues to improve parse success
     code_prefixed = _fix_common_syntax_issues(code)
     try:
         tree = ast.parse(code_prefixed)
@@ -285,12 +232,10 @@ def rewrite_token_in_code(code: str, env_keys: Optional[List[str]] = None, candi
         new_tree = rewriter.visit(tree)
         ast.fix_missing_locations(new_tree)
         new_code = ast.unparse(new_tree)
-        # Prepend import os if needed and not present
         if rewriter.need_import_os and "import os" not in new_code:
             new_code = "import os\n" + new_code
         return new_code
     except Exception:
-        # Fallback: prepend an env token shim and keep the pre-fixed code
         shim = (
             "import os\n"
             "_t = os.getenv('TELEGRAM_TOKEN') or os.getenv('BOT_TOKEN') or os.getenv('TOKEN') or os.getenv('TELEGRAM_BOT_TOKEN') or ''\n"
@@ -298,3 +243,611 @@ def rewrite_token_in_code(code: str, env_keys: Optional[List[str]] = None, candi
             "BOT_TOKEN = _t or globals().get('BOT_TOKEN','')\n"
         )
         return shim + "\n" + code_prefixed
+
+# ---- Requirements normalization and detection ---------------------------------
+
+def _normalize_requirement(name: str) -> Optional[str]:
+    if not name:
+        return None
+    s = name.strip()
+    if not s or s.startswith("#"):
+        return None
+    if "%(" in s and ")s" in s:
+        return None
+    if " " in s:
+        return None
+    for sep in ("==", ">=", "<=", "~=", ">", "<", "!="):
+        if sep in s:
+            return s
+    base = s.split(".")[0]
+    _BLACKLIST = {"os", "sys", "json", "re", "time", "pathlib", "typing", "dataclasses"}
+    if base.startswith("_") or base in _BLACKLIST:
+        return None
+    _PYPI_MAP = {
+        "telebot": "pyTelegramBotAPI",
+        "telegram": "python-telegram-bot",
+        "PIL": "pillow",
+        "cv2": "opencv-python",
+        "dotenv": "python-dotenv",
+        "bs4": "beautifulsoup4",
+        "yaml": "pyyaml",
+        "Crypto": "pycryptodome",
+        "OpenSSL": "pyOpenSSL",
+    }
+    mapped = _PYPI_MAP.get(base, base)
+    import re as _re
+    if not _re.match(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$", mapped):
+        return None
+    return mapped
+
+# Defaults and resource limits
+DEFAULT_CPU_QUOTA = 100000
+DEFAULT_MEM_LIMIT = "512m"
+DEFAULT_PIDS_LIMIT = 100
+
+# ---- Upload/save --------------------------------------------------------------
+
+def ensure_user_dir(user_id: int) -> str:
+    path = os.path.join(UPLOADS_DIR, str(user_id))
+    os.makedirs(path, exist_ok=True)
+    return path
+
+def new_bot_workspace(user_id: int, bot_id: str) -> str:
+    base = ensure_user_dir(user_id)
+    path = os.path.join(base, bot_id)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+def save_upload(user_id: int, bot_id: str, file_name: str, content: bytes) -> str:
+    path = new_bot_workspace(user_id, bot_id)
+    file_path = os.path.join(path, file_name)
+    with open(file_path, "wb") as f:
+        f.write(content)
+    if file_name.lower().endswith(".zip"):
+        import zipfile
+        with zipfile.ZipFile(file_path, "r") as zip_ref:
+            zip_ref.extractall(path)
+        os.remove(file_path)
+    return path
+
+# ---- Analyzer (framework + token var + PTB version) ---------------------------
+
+def detect_framework(code: str) -> Tuple[str, List[str]]:
+    framework = "unknown"
+    candidates: List[str] = ["TOKEN", "BOT_TOKEN", "TELEGRAM_TOKEN", "TELEGRAM_BOT_TOKEN"]
+    try:
+        tree = ast.parse(code)
+        imports = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    imports.add(alias.name.split(".")[0])
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imports.add(node.module.split(".")[0])
+        if "aiogram" in imports:
+            framework = "aiogram_v2" if "executor.start_polling" in code else "aiogram_v3"
+        elif "telebot" in imports:
+            framework = "pytelegrambotapi"
+        elif "telegram" in imports:
+            framework = "python-telegram-bot"
+        elif "pyrogram" in imports:
+            framework = "pyrogram"
+    except Exception:
+        pass
+    return framework, candidates
+
+def analyze_code(code: str) -> tuple[str, str, List[str]]:
+    framework, _ = detect_framework(code)
+    token_var = "TOKEN"
+    for pattern in [
+        r"([a-zA-Z_]\w*)\s*=\s*['\"]([0-9]+:[a-zA-Z0-9_-]+)['\"]",
+        r"([a-zA-Z_]\w*)\s*=\s*os\.getenv",
+    ]:
+        m = re.search(pattern, code)
+        if m:
+            token_var = m.group(1)
+            break
+    reqs: List[str] = []
+    if framework == "python-telegram-bot":
+        uses_updater = bool(re.search(r"\bUpdater\b", code)) or ("use_context=True" in code)
+        uses_appbuilder = bool(re.search(r"\bApplicationBuilder\b", code)) or bool(re.search(r"from\s+telegram\.ext\s+import\s+filters", code))
+        reqs = ["python-telegram-bot==13.15"] if uses_updater and not uses_appbuilder else ["python-telegram-bot>=21.0"]
+    elif framework == "pytelegrambotapi":
+        reqs = ["pyTelegramBotAPI"]
+    elif framework.startswith("aiogram"):
+        reqs = ["aiogram<3.0" if framework == "aiogram_v2" else "aiogram>=3.0"]
+    elif framework == "pyrogram":
+        reqs = ["pyrogram"]
+    return framework, token_var, reqs
+
+# ---- Requirements detector ----------------------------------------------------
+
+def detect_requirements(workspace: str) -> List[str]:
+    import_names = set()
+    ptb_hint_v13 = False
+    ptb_hint_v21 = False
+    google_genai_hint = False
+
+    def collect_imports_ast(py_path: str):
+        nonlocal ptb_hint_v13, ptb_hint_v21, google_genai_hint
+        try:
+            src = open(py_path, "r", encoding="utf-8", errors="ignore").read()
+            tree = ast.parse(src, filename=py_path)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        full = alias.name or ""
+                        base = full.split(".")[0]
+                        if base:
+                            import_names.add(base)
+                        if full.startswith("google.genai"):
+                            google_genai_hint = True
+                elif isinstance(node, ast.ImportFrom):
+                    if node.module:
+                        full = node.module
+                        base = full.split(".")[0]
+                        if base:
+                            import_names.add(base)
+                        if full.startswith("google.genai") or re.search(r"from\s+google\s+import\s+genai", src):
+                            google_genai_hint = True
+            if "telegram" in import_names or "telegram" in src:
+                if re.search(r"\bUpdater\b", src) or re.search(r"from\s+telegram\.ext\s+import\s+.*Updater", src) or ("use_context=True" in src):
+                    ptb_hint_v13 = True
+                if re.search(r"\bApplicationBuilder\b", src) or re.search(r"from\s+telegram\.ext\s+import\s+filters", src):
+                    ptb_hint_v21 = True
+        except Exception:
+            collect_imports_regex(py_path)
+
+    def collect_imports_regex(py_path: str):
+        nonlocal ptb_hint_v13, ptb_hint_v21, google_genai_hint
+        try:
+            src = open(py_path, "r", encoding="utf-8", errors="ignore").read()
+            for m in re.finditer(r"(?m)^[ \t]*import[ \t]+([A-Za-z_][A-Za-z0-9_\.]*)", src):
+                full = m.group(1)
+                base = full.split(".")[0]
+                if base:
+                    import_names.add(base)
+                if full.startswith("google.genai"):
+                    google_genai_hint = True
+            for m in re.finditer(r"(?m)^[ \t]*from[ \t]+([A-Za-z_][A-Za-z0-9_\.]*)[ \t]+import[ \t]+([A-Za-z_][A-Za-z0-9_]*)", src):
+                full = m.group(1)
+                base = full.split(".")[0]
+                if base:
+                    import_names.add(base)
+                if full == "google" and m.group(2) == "genai":
+                    google_genai_hint = True
+            if "telegram" in import_names or "telegram" in src:
+                if re.search(r"\bUpdater\b", src) or re.search(r"from\s+telegram\.ext\s+import\s+.*Updater", src) or ("use_context=True" in src):
+                    ptb_hint_v13 = True
+                if re.search(r"\bApplicationBuilder\b", src) or re.search(r"from\s+telegram\.ext\s+import\s+filters", src):
+                    ptb_hint_v21 = True
+        except Exception:
+            pass
+
+    for root, _, files in os.walk(workspace):
+        for f in files:
+            if f.endswith(".py"):
+                collect_imports_ast(os.path.join(root, f))
+
+    reqs = set()
+    for base in import_names:
+        norm = _normalize_requirement(base)
+        if norm:
+            reqs.add(norm)
+
+    req_path = os.path.join(workspace, "requirements.txt")
+    if os.path.exists(req_path):
+        try:
+            for line in open(req_path, "r", encoding="utf-8", errors="ignore"):
+                s = line.strip()
+                if not s or s.startswith("#"):
+                    continue
+                norm = _normalize_requirement(s)
+                if norm:
+                    reqs.add(norm)
+        except Exception:
+            pass
+
+    if "telebot" in import_names:
+        reqs.add("pyTelegramBotAPI")
+
+    ptb_items = [r for r in reqs if r.lower().startswith("python-telegram-bot")]
+    if ("telegram" in import_names or ptb_hint_v13 or ptb_hint_v21):
+        if not ptb_items:
+            if ptb_hint_v13 and not ptb_hint_v21:
+                reqs.add("python-telegram-bot==13.15")
+            else:
+                reqs.add("python-telegram-bot>=21.0")
+        else:
+            adjusted = set()
+            for item in ptb_items:
+                low = item.lower()
+                if any(sep in low for sep in ("==", ">=", "<=", "~=", ">", "<", "!=")):
+                    adjusted.add(item)
+                else:
+                    if ptb_hint_v13 and not ptb_hint_v21:
+                        adjusted.add("python-telegram-bot==13.15")
+                    else:
+                        adjusted.add("python-telegram-bot>=21.0")
+                reqs.discard(item)
+            for a in adjusted:
+                reqs.add(a)
+
+    if google_genai_hint:
+        reqs.add("google-genai")
+
+    return sorted(reqs)
+
+# ---- Runner and Dockerfile writer --------------------------------------------
+
+def write_runner_and_dockerfile(workspace: str, entry: Optional[str] = None, requirements: Optional[List[str]] = None):
+    entry_file = entry or "bot.py"
+    try:
+        token_vars = collect_token_vars(workspace)
+    except Exception:
+        token_vars = ["TOKEN", "BOT_TOKEN", "TELEGRAM_TOKEN", "TELEGRAM_BOT_TOKEN"]
+    runner_py = os.path.join(workspace, "gravix_runner.py")
+    token_vars_literal = "[" + ",".join(repr(n) for n in token_vars) + "]"
+    runner_code = (
+        "import os, runpy, sys, subprocess, threading, time, re, pathlib\n\n"
+        "token = os.getenv('TELEGRAM_TOKEN') or os.getenv('BOT_TOKEN') or os.getenv('TOKEN') or os.getenv('TELEGRAM_BOT_TOKEN') or ''\n"
+        f"token_vars = {token_vars_literal}\n"
+        "# Expose token in env under common names and discovered names\n"
+        "for name in set(token_vars + ['BOT_TOKEN', 'TOKEN', 'TELEGRAM_TOKEN', 'TELEGRAM_BOT_TOKEN']):\n"
+        "    try:\n"
+        "        os.environ[name] = token\n"
+        "    except Exception:\n"
+        "        pass\n"
+        "# Prepare globals so user code can reference these directly\n"
+        "init_globals = {}\n"
+        "for name in set(token_vars + ['BOT_TOKEN', 'TOKEN', 'TELEGRAM_TOKEN', 'TELEGRAM_BOT_TOKEN']):\n"
+        "    init_globals[name] = token\n"
+        "os.chdir(os.path.dirname(__file__))\n\n"
+        "try:\n"
+        "    _SRC = pathlib.Path('" + entry_file + "').read_text(encoding='utf-8', errors='ignore')\n"
+        "except Exception:\n"
+        "    _SRC = ''\n\n"
+        "def _heartbeat():\n"
+        "    while True:\n"
+        "        try:\n"
+        "            print('gravix_runner: heartbeat alive')\n"
+        "        except Exception:\n"
+        "            pass\n"
+        "        time.sleep(30)\n"
+        "threading.Thread(target=_heartbeat, daemon=True).start()\n\n"
+        "def _try_run():\n"
+        "    runpy.run_path('" + entry_file + "', init_globals=init_globals)\n\n"
+        "def _auto_install_for_missing(missing: str) -> bool:\n"
+        "    base = (missing or '').split('.')[0]\n"
+        "    M = {\n"
+        "        'telebot': 'pyTelegramBotAPI',\n"
+        "        'telegram': 'python-telegram-bot',\n"
+        "        'PIL': 'pillow',\n"
+        "        'cv2': 'opencv-python',\n"
+        "        'bs4': 'beautifulsoup4',\n"
+        "        'yaml': 'pyyaml',\n"
+        "        'dotenv': 'python-dotenv',\n"
+        "        'Crypto': 'pycryptodome',\n"
+        "        'OpenSSL': 'pyOpenSSL',\n"
+        "        'lxml': 'lxml',\n"
+        "        'requests': 'requests',\n"
+        "        'aiohttp': 'aiohttp',\n"
+        "        'pytz': 'pytz',\n"
+        "        'tornado': 'tornado',\n"
+        "        'apscheduler': 'APScheduler',\n"
+        "        'APScheduler': 'APScheduler',\n"
+        "        'cryptography': 'cryptography',\n"
+        "        'certifi': 'certifi',\n"
+        "        'charset_normalizer': 'charset-normalizer',\n"
+        "        'idna': 'idna',\n"
+        "        'urllib3': 'urllib3',\n"
+        "        'numpy': 'numpy',\n"
+        "        'pandas': 'pandas',\n"
+        "        'matplotlib': 'matplotlib',\n"
+        "        'scipy': 'scipy',\n"
+        "        'pyyaml': 'pyyaml',\n"
+        "        'google.genai': 'google-genai',\n"
+        "        'google': 'google-genai' if ('google.genai' in _SRC or re.search(r'from\\s+google\\s+import\\s+genai', _SRC)) else None,\n"
+        "    }\n"
+        "    candidates = []\n"
+        "    mapped_full = M.get(missing)\n"
+        "    if mapped_full:\n"
+        "        candidates.append(mapped_full)\n"
+        "    mapped_base = M.get(base)\n"
+        "    if mapped_base and mapped_base not in candidates:\n"
+        "        candidates.append(mapped_base)\n"
+        "    if missing and missing not in candidates:\n"
+        "        candidates.append(missing)\n"
+        "    if base and base not in candidates:\n"
+        "        candidates.append(base)\n"
+        "    for pkg in candidates:\n"
+        "        if not pkg:\n"
+        "            continue\n"
+        "        try:\n"
+        "            print(f'gravix_runner: installing {pkg} for missing import {missing}')\n"
+        "            subprocess.check_call([sys.executable, '-m', 'pip', 'install', pkg])\n"
+        "            return True\n"
+        "        except Exception as _e:\n"
+        "            print(f'gravix_runner: failed to install {pkg}: {_e}')\n"
+        "            continue\n"
+        "    return False\n\n"
+        "print('gravix_runner: entry=" + entry_file + " token_len=%d' % (len(token)))\n\n"
+        "while True:\n"
+        "    try:\n"
+        "        _try_run()\n"
+        "        print('gravix_runner: user script finished (no long-running loop)')\n"
+        "        sys.exit(0)\n"
+        "    except ImportError as e:\n"
+        "        msg = str(e)\n"
+        "        if 'telegram.ext' in msg and ('Filters' in msg or 'Updater' in msg):\n"
+        "            try:\n"
+        "                print('gravix_runner: detected PTB API mismatch, installing python-telegram-bot==13.15')\n"
+        "                subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'python-telegram-bot==13.15'])\n"
+        "                continue\n"
+        "            except Exception:\n"
+        "                import traceback; traceback.print_exc(); sys.exit(1)\n"
+        "        missing = getattr(e, 'name', None)\n"
+        "        if not missing and 'No module named' in msg:\n"
+        "            m = re.search(r\"No module named ['\\\"]([^'\\\"]+)['\\\"]\", msg)\n"
+        "            if m:\n"
+        "                missing = m.group(1)\n"
+        "        if missing and _auto_install_for_missing(missing):\n"
+        "            continue\n"
+        "        raise\n"
+        "    except ModuleNotFoundError as e:\n"
+        "        missing = getattr(e, 'name', None)\n"
+        "        if not missing and 'No module named' in str(e):\n"
+        "            m = re.search(r\"No module named ['\\\"]([^'\\\"]+)['\\\"]\", str(e))\n"
+        "            if m:\n"
+        "                missing = m.group(1)\n"
+        "        if missing and _auto_install_for_missing(missing):\n"
+        "            continue\n"
+        "        else:\n"
+        "            raise\n"
+        "    except SystemExit:\n"
+        "        raise\n"
+        "    except Exception:\n"
+        "        import traceback\n"
+        "        traceback.print_exc()\n"
+        "        sys.exit(1)\n"
+    )
+    with open(runner_py, "w", encoding="utf-8", newline="\n") as f:
+        f.write(runner_code)
+
+    dockerfile = os.path.join(workspace, "Dockerfile")
+    with open(dockerfile, "w", encoding="utf-8", newline="\n") as f:
+        f.write("FROM python:3.11-slim\n")
+        f.write("WORKDIR /app\n")
+        f.write("COPY . /app\n")
+        f.write("RUN apt-get update && apt-get install -y --no-install-recommends build-essential && rm -rf /var/lib/apt/lists/*\n")
+        f.write("RUN pip install --no-cache-dir --upgrade pip\n")
+        if requirements:
+            req_auto_path = os.path.join(workspace, "requirements.autodetected.txt")
+            with open(req_auto_path, "w", encoding="utf-8", newline="\n") as rf:
+                rf.write("\n".join(requirements))
+            f.write("RUN pip install -r requirements.autodetected.txt\n")
+        f.write("RUN if [ -f requirements.txt ]; then pip install -r requirements.txt; fi\n")
+        f.write("ENV PYTHONUNBUFFERED=1 PYTHONPATH=/app\n")
+        f.write('CMD ["python", "/app/gravix_runner.py"]\n')
+
+# ---- Docker availability ------------------------------------------------------
+
+def _docker_available() -> bool:
+    try:
+        client = docker_from_env()
+        client.ping()
+        return True
+    except Exception:
+        return False
+
+# ---- Single-file build and run ------------------------------------------------
+
+def build_and_run_from_code(
+    uid: int,
+    name: str,
+    code: str,
+    reqs: List[str],
+    framework: str,
+    token_var: str,
+    token: str,
+) -> Tuple[bool, Optional[str], Optional[str]]:
+    temp_dir = None
+    client = docker_from_env()
+    try:
+        temp_dir = tempfile.mkdtemp()
+        with open(os.path.join(temp_dir, "bot.py"), "w", encoding="utf-8") as f:
+            try:
+                candidate_vars = collect_token_vars(temp_dir)
+            except Exception:
+                candidate_vars = [token_var]
+            f.write(rewrite_token_in_code(code, env_keys=_ENV_KEYS_DEFAULT, candidate_vars=candidate_vars))
+        with open(os.path.join(temp_dir, "requirements.txt"), "w", encoding="utf-8") as f:
+            f.write("\n".join(reqs) if reqs else "")
+        write_runner_and_dockerfile(temp_dir, entry="bot.py", requirements=reqs)
+
+        image_tag = f"hostbot_{uid}_{name}_{int(time.time())}".lower().replace(" ", "_").replace("-", "_")
+        container_name = image_tag
+
+        client.images.build(path=temp_dir, tag=image_tag, rm=True)
+
+        network = RUNTIME_NETWORK
+        if network:
+            try:
+                nets = client.networks.list(names=[network])
+                if not nets:
+                    client.networks.create(name=network)
+                    log_event(f"Created missing Docker network: {network}")
+            except Exception:
+                log_event(f"Could not verify/create network '{network}', proceeding with defaults.")
+                network = None
+
+        container = client.containers.run(
+            image_tag,
+            name=container_name,
+            detach=True,
+            environment={
+                "TELEGRAM_TOKEN": token,
+                "BOT_TOKEN": token,
+                "TOKEN": token,
+                "TELEGRAM_BOT_TOKEN": token,
+            },
+            cpu_quota=DEFAULT_CPU_QUOTA,
+            mem_limit=DEFAULT_MEM_LIMIT,
+            pids_limit=DEFAULT_PIDS_LIMIT,
+            network=network if network else None,
+            restart_policy={"Name": "no"},
+        )
+        rid = container.id
+        if temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        return True, rid, None
+    except Exception as e:
+        if temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        return False, None, f"{str(e)[:200]}"
+
+# ---- Full workspace build and run --------------------------------------------
+
+def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: Optional[str] = None) -> Tuple[bool, Optional[str], Optional[str]]:
+    if not _docker_available():
+        log_event("Docker not available. Aborting deployment.")
+        return False, None, "docker_unavailable"
+
+    code = None
+    entry_file = entry
+    try:
+        if not entry_file:
+            candidate = os.path.join(workspace, "bot.py")
+            if os.path.exists(candidate):
+                entry_file = "bot.py"
+            else:
+                for f in os.listdir(workspace):
+                    if f.endswith(".py"):
+                        entry_file = f
+                        break
+        if entry_file:
+            code = open(os.path.join(workspace, entry_file), "r", encoding="utf-8", errors="ignore").read()
+    except Exception:
+        code = None
+
+    if not code:
+        return False, None, "no_entry_py"
+
+    framework, candidate_names = detect_framework(code)
+    try:
+        full_reqs = detect_requirements(workspace)
+    except Exception:
+        full_reqs = []
+    reqs = full_reqs or (["python-telegram-bot>=21.0"] if framework == "python-telegram-bot" else [])
+
+    temp_dir = None
+    client = docker_from_env()
+    try:
+        temp_dir = tempfile.mkdtemp()
+        try:
+            code = rewrite_token_in_code(code, env_keys=_ENV_KEYS_DEFAULT, candidate_vars=candidate_names)
+        except Exception:
+            pass
+        with open(os.path.join(temp_dir, "bot.py"), "w", encoding="utf-8") as f:
+            f.write(code)
+        with open(os.path.join(temp_dir, "requirements.txt"), "w", encoding="utf-8") as f:
+            f.write("\n".join(reqs) if reqs else "")
+        write_runner_and_dockerfile(temp_dir, entry="bot.py", requirements=reqs)
+
+        image_tag = f"hostbot_{user_id}_{bot_id}_{int(time.time())}".lower().replace(" ", "_").replace("-", "_")
+        container_name = image_tag
+
+        client.images.build(path=temp_dir, tag=image_tag, rm=True)
+
+        network = RUNTIME_NETWORK
+        if network:
+            try:
+                nets = client.networks.list(names=[network])
+                if not nets:
+                    client.networks.create(name=network)
+                    log_event(f"Created missing Docker network: {network}")
+            except Exception:
+                log_event(f"Could not verify/create network '{network}', proceeding with defaults.")
+                network = None
+
+        container = client.containers.run(
+            image_tag,
+            name=container_name,
+            detach=True,
+            environment={
+                "TELEGRAM_TOKEN": token,
+                "BOT_TOKEN": token,
+                "TOKEN": token,
+                "TELEGRAM_BOT_TOKEN": token,
+            },
+            cpu_quota=DEFAULT_CPU_QUOTA,
+            mem_limit=DEFAULT_MEM_LIMIT,
+            pids_limit=DEFAULT_PIDS_LIMIT,
+            network=network if network else None,
+            restart_policy={"Name": "no"},
+        )
+        runtime_id = container.id
+        log_event(f"Runtime started {runtime_id} for {bot_id} (framework={framework})")
+        if temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        return True, runtime_id, None
+    except docker_errors.BuildError:
+        return False, None, "build_error"
+    except Exception as e:
+        log_event(f"Build/run failed for {bot_id}: {e}")
+        return False, None, str(e)
+    finally:
+        if temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+# ---- Runtime helpers ----------------------------------------------------------
+
+def stop_runtime(runtime_id: str) -> bool:
+    try:
+        client = docker_from_env()
+        try:
+            client.api.stop(runtime_id, timeout=10)
+        except Exception:
+            pass
+        try:
+            client.api.remove_container(runtime_id, force=True)
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+def restart_runtime(runtime_id: str) -> bool:
+    try:
+        client = docker_from_env()
+        client.api.restart(runtime_id)
+        return True
+    except Exception:
+        return False
+
+def remove_image(image_tag: str) -> bool:
+    try:
+        client = docker_from_env()
+        client.images.remove(image=image_tag, force=True)
+        return True
+    except Exception:
+        return False
+
+def remove_workspace(workspace: str):
+    try:
+        shutil.rmtree(workspace, ignore_errors=True)
+    except Exception:
+        pass
+
+def get_runtime_logs(runtime_id: str, tail: int = 200) -> Optional[str]:
+    try:
+        client = docker_from_env()
+        logs = client.api.logs(runtime_id, tail=tail, stdout=True, stderr=True)
+        if isinstance(logs, (bytes, bytearray)):
+            try:
+                return logs.decode("utf-8", errors="replace")
+            except Exception:
+                return logs.decode("latin1", errors="replace")
+        return str(logs)
+    except Exception:
+        return None
