@@ -465,6 +465,8 @@ def analyze_code(code: str) -> tuple[str, str, List[str]]:
     """
     Return (framework, token_var, reqs_guess) using a lightweight approach
     like the reference script.
+    Also pick a compatible python-telegram-bot version by looking for Updater/use_context
+    vs ApplicationBuilder/filters usage.
     """
     # Framework detection (light)
     framework = "unknown"
@@ -499,7 +501,18 @@ def analyze_code(code: str) -> tuple[str, str, List[str]]:
             token_var = m.group(1)
             break
 
-    reqs = guess_requirements(framework)
+    # Requirement guess: handle PTB legacy vs modern API
+    reqs: List[str] = []
+    if framework == 'python-telegram-bot':
+        uses_updater = bool(re.search(r'\bUpdater\b', code)) or ("use_context=True" in code)
+        uses_appbuilder = bool(re.search(r'\bApplicationBuilder\b', code)) or bool(re.search(r'from\s+telegram\.ext\s+import\s+filters', code))
+        if uses_updater and not uses_appbuilder:
+            reqs = ["python-telegram-bot==13.15"]
+        else:
+            reqs = ["python-telegram-bot>=21.0"]
+    else:
+        reqs = guess_requirements(framework)
+
     return framework, token_var, reqs
 
 
@@ -594,6 +607,7 @@ def detect_requirements(workspace: str) -> List[str]:
     ptb_hint_v21 = False
 
     def collect_imports_ast(py_path: str):
+        nonlocal ptb_hint_v13, ptb_hint_v21
         try:
             with open(py_path, "r", encoding="utf-8", errors="ignore") as f:
                 src = f.read()
@@ -620,6 +634,7 @@ def detect_requirements(workspace: str) -> List[str]:
             collect_imports_regex(py_path)
 
     def collect_imports_regex(py_path: str):
+        nonlocal ptb_hint_v13, ptb_hint_v21
         try:
             with open(py_path, "r", encoding="utf-8", errors="ignore") as f:
                 src = f.read()
@@ -635,10 +650,8 @@ def detect_requirements(workspace: str) -> List[str]:
             # Regex heuristics for PTB
             if "telegram" in import_names or "telegram" in src:
                 if re.search(r"\bUpdater\b", src) or re.search(r"from\s+telegram\.ext\s+import\s+.*Updater", src) or ("use_context=True" in src):
-                    nonlocal ptb_hint_v13
                     ptb_hint_v13 = True
                 if re.search(r"\bApplicationBuilder\b", src) or re.search(r"from\s+telegram\.ext\s+import\s+filters", src):
-                    nonlocal ptb_hint_v21
                     ptb_hint_v21 = True
         except Exception:
             pass
@@ -886,10 +899,8 @@ def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: 
     except Exception:
         full_reqs = []
     reqs = full_reqs or guess_requirements(framework)
-    # Ensure PTB is pinned to >=21.0 if detected
-    if any(r.lower().startswith("python-telegram-bot") for r in reqs):
-        reqs = [r for r in reqs if not r.lower().startswith("python-telegram-bot")]
-        reqs.append("python-telegram-bot>=21.0")
+    # Keep detected PTB version as-is (13.15 for Updater, >=21.0 for ApplicationBuilder).
+    # Do not override user-provided pins or autodetection.
 
     temp_dir = None
     client = docker_from_env()
