@@ -746,6 +746,20 @@ try:
     # If the user script returns immediately, provide a clear message.
     print('gravix_runner: user script finished (no long-running loop)')
     sys.exit(0)
+except ImportError as e:
+    # Handle PTB API mismatch (Filters/Updater missing in v21+)
+    msg = str(e)
+    if 'telegram.ext' in msg and ('Filters' in msg or 'Updater' in msg):
+        try:
+            print('gravix_runner: detected PTB API mismatch, installing python-telegram-bot==13.15')
+            subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'python-telegram-bot==13.15'])
+            _try_run()
+            print('gravix_runner: user script finished (no long-running loop)')
+            sys.exit(0)
+        except Exception:
+            import traceback; traceback.print_exc(); sys.exit(1)
+    else:
+        raise
 except ModuleNotFoundError as e:
     missing = getattr(e, 'name', None)
     if not missing and 'No module named' in str(e):
