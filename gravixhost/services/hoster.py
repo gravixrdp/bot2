@@ -716,12 +716,6 @@ def detect_requirements(workspace: str) -> List[str]:
                 reqs.discard(item)
             for a in adjusted:
                 reqs.add(a)
-        elif not ptb_present:
-            # No PTB entry at all, add based on hints
-            if ptb_hint_v13 and not ptb_hint_v21:
-                reqs.add("python-telegram-bot==13.15")
-            else:
-                reqs.add("python-telegram-bot>=21.0")
 
     return sorted(reqs)
 
