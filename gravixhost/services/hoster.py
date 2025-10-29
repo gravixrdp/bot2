@@ -740,7 +740,7 @@ def write_runner_and_dockerfile(workspace: str, entry: Optional[str] = None, req
 
     # Python runner: injects token into globals so common patterns like BOT_TOKEN/TOKEN work
     runner_py = os.path.join(workspace, "gravix_runner.py")
-    runner_code = f"""import os, runpy, sys, subprocess, threading, time, re
+    runner_code = f"""import os, runpy, sys, subprocess, threading, time, re, pathlib
 
 token = os.getenv('TELEGRAM_TOKEN') or os.getenv('BOT_TOKEN') or os.getenv('TOKEN') or os.getenv('TELEGRAM_BOT_TOKEN') or ''
 # Expose in env for libraries that read from environment
@@ -749,9 +749,15 @@ os.environ['TELEGRAM_TOKEN'] = token
 os.environ['TOKEN'] = token
 os.environ['TELEGRAM_BOT_TOKEN'] = token
 # Prepare globals so user code can reference BOT_TOKEN or TOKEN directly
-init_globals = {{'BOT_TOKEN': token, 'TOKEN': token, 'TELEGRAM_TOKEN': token}}
+init_globals = {'BOT_TOKEN': token, 'TOKEN': token, 'TELEGRAM_TOKEN': token}
 # Ensure current working directory is the app root
 os.chdir(os.path.dirname(__file__))
+
+# Read source of entry to help heuristics (e.g., google.genai)
+try:
+    _SRC = pathlib.Path('{entry_file}').read_text(encoding='utf-8', errors='ignore')
+except Exception:
+    _SRC = ''
 
 # Heartbeat thread to confirm liveness in logs
 def _heartbeat():
@@ -763,64 +769,113 @@ def _heartbeat():
         time.sleep(30)
 threading.Thread(target=_heartbeat, daemon=True).start()
 
-# Run the user's entry file in this process
-print('gravix_runner: entry={entry_file} token_len=%d' % (len(token)))
 def _try_run():
     runpy.run_path('{entry_file}', init_globals=init_globals)
 
-try:
-    _try_run()
-    # If the user script returns immediately, provide a clear message.
-    print('gravix_runner: user script finished (no long-running loop)')
-    sys.exit(0)
-except ImportError as e:
-    # Handle PTB API mismatch (Filters/Updater missing in v21+)
-    msg = str(e)
-    if 'telegram.ext' in msg and ('Filters' in msg or 'Updater' in msg):
-        try:
-            print('gravix_runner: detected PTB API mismatch, installing python-telegram-bot==13.15')
-            subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'python-telegram-bot==13.15'])
-            _try_run()
-            print('gravix_runner: user script finished (no long-running loop)')
-            sys.exit(0)
-        except Exception:
-            import traceback; traceback.print_exc(); sys.exit(1)
-    else:
-        raise
-except ModuleNotFoundError as e:
-    missing = getattr(e, 'name', None)
-    if not missing and 'No module named' in str(e):
-        m = re.search(r"No module named ['\\\"]([^'\\\"]+)['\\\"]", str(e))
-        if m:
-            missing = m.group(1)
-    _MAP = {{
+def _auto_install_for_missing(missing: str) -> bool:
+    base = (missing or '').split('.')[0]
+    # Map common import names to PyPI packages
+    M = {
         'telebot': 'pyTelegramBotAPI',
         'telegram': 'python-telegram-bot',
         'PIL': 'pillow',
         'cv2': 'opencv-python',
         'bs4': 'beautifulsoup4',
         'yaml': 'pyyaml',
+        'dotenv': 'python-dotenv',
         'Crypto': 'pycryptodome',
         'OpenSSL': 'pyOpenSSL',
-    }}
-    pkg = _MAP.get(missing)
-    if pkg:
-        print('gravix_runner: auto-installing %s for missing module %s' % (pkg, missing))
+        'lxml': 'lxml',
+        'requests': 'requests',
+        'aiohttp': 'aiohttp',
+        'pytz': 'pytz',
+        'tornado': 'tornado',
+        'apscheduler': 'APScheduler',
+        'APScheduler': 'APScheduler',
+        'cryptography': 'cryptography',
+        'certifi': 'certifi',
+        'charset_normalizer': 'charset-normalizer',
+        'idna': 'idna',
+        'urllib3': 'urllib3',
+        'numpy': 'numpy',
+        'pandas': 'pandas',
+        'matplotlib': 'matplotlib',
+        'scipy': 'scipy',
+        'pyyaml': 'pyyaml',
+        # Google Generative AI SDK
+        'google.genai': 'google-genai',
+        'google': 'google-genai' if ('google.genai' in _SRC or re.search(r'from\\s+google\\s+import\\s+genai', _SRC)) else None,
+    }
+    candidates = []
+    mapped_full = M.get(missing)
+    if mapped_full:
+        candidates.append(mapped_full)
+    mapped_base = M.get(base)
+    if mapped_base and mapped_base not in candidates:
+        candidates.append(mapped_base)
+    # Try direct install of the missing module name (best-effort)
+    if missing and missing not in candidates:
+        candidates.append(missing)
+    # Also try base name if not already included
+    if base and base not in candidates:
+        candidates.append(base)
+
+    for pkg in candidates:
+        if not pkg:
+            continue
         try:
+            print(f'gravix_runner: installing {pkg} for missing import {missing}')
             subprocess.check_call([sys.executable, '-m', 'pip', 'install', pkg])
-            _try_run()
-            print('gravix_runner: user script finished (no long-running loop)')
-            sys.exit(0)
-        except Exception:
-            import traceback; traceback.print_exc(); sys.exit(1)
-    else:
+            return True
+        except Exception as _e:
+            print(f'gravix_runner: failed to install {pkg}: {_e}')
+            continue
+    return False
+
+print('gravix_runner: entry={entry_file} token_len=%d' % (len(token)))
+
+# Repeatedly attempt to run and auto-install missing packages until success or a non-installable error occurs
+while True:
+    try:
+        _try_run()
+        print('gravix_runner: user script finished (no long-running loop)')
+        sys.exit(0)
+    except ImportError as e:
+        # Special-case PTB API mismatch (Filters/Updater missing in v21+)
+        msg = str(e)
+        if 'telegram.ext' in msg and ('Filters' in msg or 'Updater' in msg):
+            try:
+                print('gravix_runner: detected PTB API mismatch, installing python-telegram-bot==13.15')
+                subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'python-telegram-bot==13.15'])
+                # Try again
+                continue
+            except Exception:
+                import traceback; traceback.print_exc(); sys.exit(1)
+        # Other import errors may still be resolvable via auto-install if they represent missing modules
+        missing = getattr(e, 'name', None)
+        if not missing and 'No module named' in msg:
+            m = re.search(r"No module named ['\\\"]([^'\\\"]+)['\\\"]", msg)
+            if m:
+                missing = m.group(1)
+        if missing and _auto_install_for_missing(missing):
+            continue
         raise
-except SystemExit:
-    raise
-except Exception:
-    import traceback
-    traceback.print_exc()
-    sys.exit(1)
+    except ModuleNotFoundError as e:
+        missing = getattr(e, 'name', None)
+        if not missing and 'No module named' in str(e):
+            m = re.search(r"No module named ['\\\"]([^'\\\"]+)['\\\"]", str(e))
+            if m:
+                missing = m.group(1)
+        if missing and _auto_install_for_missing(missing):
+            continue
+        else:
+            raise
+    except SystemExit:
+        raise
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 """
     with open(runner_py, "w", encoding="utf-8", newline="\n") as f:
         f.write(runner_code)
