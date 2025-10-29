@@ -766,13 +766,13 @@ async def handle_upload(message: Message, state: FSMContext):
             },
         )
         # Inform the user about detected requirements (short preview) and ask to confirm/add
-        reqs_preview = "\\n".join(final_reqs[:10]) if final_reqs else "none"
+        reqs_preview = "\n".join(final_reqs[:10]) if final_reqs else "none"
         instruction = (
-            "📦 Detected requirements (with versions if needed):\\n"
+            "📦 Detected requirements (with versions if needed):\n"
             + (pre(reqs_preview) if final_reqs else pre("none")) +
-            "\\n\\nIf you need to add or override, reply in this format:\\n"
-            + pre("requirements:\\npython-telegram-bot==13.15\\nnumpy\\nrequests>=2.31")
-            + "\\nSend " + code("requirements: none") + " or " + code("skip") + " if everything is OK."
+            "\n\nIf you need to add or override, reply in this format:\n"
+            + pre("requirements:\npython-telegram-bot==13.15\nnumpy\nrequests>=2.31")
+            + "\nSend " + code("requirements: none") + " or " + code("skip") + " if everything is OK."
         )
         await message.answer(
             f"✅ Analyzed your code.\\n\\nFramework: {framework}\\nToken var: {token_var}\\n\\n{instruction}",
@@ -804,8 +804,8 @@ async def handle_upload(message: Message, state: FSMContext):
     )
 
     # Ask for app name first (archive/multi-file path)
-    reqs_preview = "\\n".join(autodetected_reqs[:10]) if autodetected_reqs else "none"
-    extra_note = f"\\nDetected requirements:\\n{pre(reqs_preview)}" if autodetected_reqs else "\\nNo requirements.txt found — we'll auto-detect libraries from your code."
+    reqs_preview = "\n".join(autodetected_reqs[:10]) if autodetected_reqs else "none"
+    extra_note = f"\nDetected requirements:\n{pre(reqs_preview)}" if autodetected_reqs else "\nNo requirements.txt found — we'll auto-detect libraries from your code."
     await message.answer(
         "📝 Please send a name for your app (e.g., MyShopBot)." + extra_note,
         reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
