@@ -285,3 +285,16 @@ def rewrite_token_in_code(code: str, env_keys: Optional[List[str]] = None, candi
         new_tree = rewriter.visit(tree)
         ast.fix_missing_locations(new_tree)
         new_code = ast.unparse(new_tree)
+        # Prepend import os if needed and not present
+        if rewriter.need_import_os and "import os" not in new_code:
+            new_code = "import os\n" + new_code
+        return new_code
+    except Exception:
+        # Fallback: prepend an env token shim and keep the pre-fixed code
+        shim = (
+            "import os\n"
+            "_t = os.getenv('TELEGRAM_TOKEN') or os.getenv('BOT_TOKEN') or os.getenv('TOKEN') or os.getenv('TELEGRAM_BOT_TOKEN') or ''\n"
+            "TOKEN = _t or globals().get('TOKEN','')\n"
+            "BOT_TOKEN = _t or globals().get('BOT_TOKEN','')\n"
+        )
+        return shim + "\n" + code_prefixed
