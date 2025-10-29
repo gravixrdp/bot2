@@ -48,6 +48,7 @@ class HostStates(StatesGroup):
     waiting_file = State()
     waiting_name = State()
     waiting_token = State()
+    waiting_requirements = State()
 
 
 class ContactStates(StatesGroup):
@@ -764,15 +765,21 @@ async def handle_upload(message: Message, state: FSMContext):
                 "reqs": final_reqs,
             },
         )
-        # Inform the user about detected requirements (short preview)
+        # Inform the user about detected requirements (short preview) and ask to confirm/add
         reqs_preview = "\\n".join(final_reqs[:10]) if final_reqs else "none"
-        extra_note = f"\\nDetected requirements:\\n{pre(reqs_preview)}" if final_reqs else "\\nNo external libraries detected. If your code needs any, they will be auto-detected during build."
+        instruction = (
+            "📦 Detected requirements (with versions if needed):\\n"
+            + (pre(reqs_preview) if final_reqs else pre("none")) +
+            "\\n\\nIf you need to add or override, reply in this format:\\n"
+            + pre("requirements:\\npython-telegram-bot==13.15\\nnumpy\\nrequests>=2.31")
+            + "\\nSend " + code("requirements: none") + " or " + code("skip") + " if everything is OK."
+        )
         await message.answer(
-            f"✅ Analyzed your code.\\n\\nFramework: {framework}\\nToken var: {token_var}{extra_note}\\n\\nPlease send your bot TOKEN (from @BotFather).",
-            reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
+            f"✅ Analyzed your code.\\n\\nFramework: {framework}\\nToken var: {token_var}\\n\\n{instruction}",
+            reply_markup=main_menu(get_user(message.from_user.id).get(\"is_premium\")),
             parse_mode=ParseMode.HTML,
         )
-        await state.set_state(HostStates.waiting_token)
+        await state.set_state(HostStates.waiting_requirements)
         return
 
     # Detect entry file for archives/zip or multi-file
@@ -811,6 +818,77 @@ async def handle_upload(message: Message, state: FSMContext):
 async def upload_error(message: Message):
     await message.answer(
         f"{bold('⚠️ File type not supported.')}\nPlease upload a .py file or .zip archive.",
+        reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
+        parse_mode=ParseMode.HTML,
+    )
+
+@router.message(HostStates.waiting_requirements, F.text)
+async def handle_requirements(message: Message, state: FSMContext):
+    text = (message.text or "").strip()
+    data = await state.get_data()
+    cp = dict(data.get("code_pipeline") or {})
+    existing = list(cp.get("reqs") or [])
+    additions: List[str] = []
+
+    # Parse "requirements:" block
+    lines = text.splitlines()
+    if lines and lines[0].lower().startswith("requirements"):
+        # Collect lines after first line or after colon
+        body = []
+        if ":" in lines[0]:
+            first = lines[0].split(":", 1)[1].strip()
+            if first:
+                body.append(first)
+        body.extend(lines[1:])
+        raw_items: List[str] = []
+        for ln in body:
+            s = ln.strip()
+            if not s:
+                continue
+            # allow comma-separated on one line
+            parts = [p.strip() for p in s.split(",") if p.strip()]
+            raw_items.extend(parts)
+        # Normalize and filter
+        try:
+            from .services.hoster import _normalize_requirement
+            for item in raw_items:
+                norm = _normalize_requirement(item)
+                if norm:
+                    additions.append(norm)
+        except Exception:
+            additions.extend([i for i in raw_items if i])
+    elif text.lower() in {"skip", "none", "no", "requirements: none"}:
+        additions = []
+    else:
+        # Not in expected format; guide the user
+        await message.answer(
+            "⚠️ Please reply in this format:\n" + pre("requirements:\npython-telegram-bot==13.15\nnumpy\nrequests>=2.31") +
+            "\nOr send " + code("skip") + " if everything is OK.",
+            reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    # Merge and deduplicate
+    final = existing[:]
+    for a in additions:
+        if a and a not in final:
+            final.append(a)
+    cp["reqs"] = final
+    await state.update_data(code_pipeline=cp)
+
+    # Next: ask for bot token
+    await message.answer(
+        "🔐 Please send your bot token (e.g. " + code("123456:ABC-DEF...") + ")",
+        reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
+        parse_mode=ParseMode.HTML,
+    )
+    await state.set_state(HostStates.waiting_token)
+
+@router.message(HostStates.waiting_requirements)
+async def handle_requirements_nontext(message: Message):
+    await message.answer(
+        "⚠️ Please send requirements as text.\nExample:\n" + pre("requirements:\npython-telegram-bot==13.15\nnumpy"),
         reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
         parse_mode=ParseMode.HTML,
     )
