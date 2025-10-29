@@ -526,8 +526,10 @@ def build_and_run_from_code(
     token: str,
 ) -> Tuple[bool, Optional[str], Optional[str]]:
     """
-    Build and run a single-file bot exactly like the reference script approach.
-    Returns (ok, runtime_id, error). Uses Docker isolation and existing runtime settings.
+    Build and run a single-file bot using the same hardened runner used elsewhere:
+    - Writes gravix_runner.py to auto-inject token and auto-install missing packages
+    - Uses a Dockerfile that installs requirements and runs the runner
+    - No auto-restart on crash; surface errors and stop
     """
     temp_dir = None
     client = docker_from_env()
@@ -539,21 +541,8 @@ def build_and_run_from_code(
         with open(os.path.join(temp_dir, "requirements.txt"), "w", encoding="utf-8") as f:
             f.write("\n".join(reqs) if reqs else "")
 
-        # Choose base image similar to the sample
-        base_img = AIOGRAM_V2_IMAGE if framework == 'aiogram_v2' else DEFAULT_BASE_IMAGE
-        dockerfile = (
-            f"FROM {base_img}\n"
-            "WORKDIR /app\n"
-            "COPY requirements.txt .\n"
-            "RUN pip install --no-cache-dir -r requirements.txt\n"
-            "COPY bot.py .\n"
-            f"ENV TOKEN={token}\n"
-            f"ENV BOT_TOKEN={token}\n"
-            f"ENV {token_var}={token}\n"
-            "CMD [\"python\",\"-u\",\"bot.py\"]\n"
-        )
-        with open(os.path.join(temp_dir, "Dockerfile"), "w", encoding="utf-8") as f:
-            f.write(dockerfile)
+        # Write runner and Dockerfile (stable path, includes auto-install logic)
+        write_runner_and_dockerfile(temp_dir, entry="bot.py", requirements=reqs)
 
         image_tag = f"hostbot_{uid}_{name}_{int(time.time())}".lower().replace(" ", "_").replace("-", "_")
         container_name = f"hostbot_{uid}_{name}_{int(time.time())}".lower().replace(" ", "_").replace("-", "_")
@@ -577,11 +566,20 @@ def build_and_run_from_code(
             image_tag,
             name=container_name,
             detach=True,
+            environment={
+                # Primary token env
+                "TELEGRAM_TOKEN": token,
+                # Common aliases to maximize compatibility
+                "BOT_TOKEN": token,
+                "TOKEN": token,
+                "TELEGRAM_BOT_TOKEN": token,
+            },
             cpu_quota=DEFAULT_CPU_QUOTA,
             mem_limit=DEFAULT_MEM_LIMIT,
             pids_limit=DEFAULT_PIDS_LIMIT,
             network=network if network else None,
-            restart_policy={"Name": "unless-stopped"},
+            # Do not auto-restart; if code crashes we surface error and stop
+            restart_policy={"Name": "no"},
         )
         rid = container.id
         if temp_dir:
