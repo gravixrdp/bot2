@@ -776,7 +776,7 @@ async def handle_upload(message: Message, state: FSMContext):
         )
         await message.answer(
             f"✅ Analyzed your code.\\n\\nFramework: {framework}\\nToken var: {token_var}\\n\\n{instruction}",
-            reply_markup=main_menu(get_user(message.from_user.id).get(\"is_premium\")),
+            reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
             parse_mode=ParseMode.HTML,
         )
         await state.set_state(HostStates.waiting_requirements)
