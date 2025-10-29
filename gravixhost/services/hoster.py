@@ -605,9 +605,10 @@ def detect_requirements(workspace: str) -> List[str]:
     import_names = set()
     ptb_hint_v13 = False
     ptb_hint_v21 = False
+    google_genai_hint = False
 
     def collect_imports_ast(py_path: str):
-        nonlocal ptb_hint_v13, ptb_hint_v21
+        nonlocal ptb_hint_v13, ptb_hint_v21, google_genai_hint
         try:
             with open(py_path, "r", encoding="utf-8", errors="ignore") as f:
                 src = f.read()
@@ -615,14 +616,20 @@ def detect_requirements(workspace: str) -> List[str]:
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
                     for alias in node.names:
-                        base = (alias.name or "").split(".")[0]
+                        full = alias.name or ""
+                        base = full.split(".")[0]
                         if base:
                             import_names.add(base)
+                        if full.startswith("google.genai") or "from google import genai" in src:
+                            google_genai_hint = True
                 elif isinstance(node, ast.ImportFrom):
                     if node.module:
-                        base = node.module.split(".")[0]
+                        full = node.module
+                        base = full.split(".")[0]
                         if base:
                             import_names.add(base)
+                        if full.startswith("google.genai") or re.search(r"from\s+google\s+import\s+genai", src):
+                            google_genai_hint = True
             # Heuristics for PTB major versions
             if "telegram" in import_names or "telegram" in src:
                 if re.search(r"\bUpdater\b", src) or re.search(r"from\s+telegram\.ext\s+import\s+.*Updater", src) or ("use_context=True" in src):
@@ -634,19 +641,25 @@ def detect_requirements(workspace: str) -> List[str]:
             collect_imports_regex(py_path)
 
     def collect_imports_regex(py_path: str):
-        nonlocal ptb_hint_v13, ptb_hint_v21
+        nonlocal ptb_hint_v13, ptb_hint_v21, google_genai_hint
         try:
             with open(py_path, "r", encoding="utf-8", errors="ignore") as f:
                 src = f.read()
             # import x, import x as y, from x import y
             for m in re.finditer(r"(?m)^[ \t]*import[ \t]+([A-Za-z_][A-Za-z0-9_\.]*)", src):
-                base = m.group(1).split(".")[0]
+                full = m.group(1)
+                base = full.split(".")[0]
                 if base:
                     import_names.add(base)
-            for m in re.finditer(r"(?m)^[ \t]*from[ \t]+([A-Za-z_][A-Za-z0-9_\.]*)[ \t]+import[ \t]+", src):
-                base = m.group(1).split(".")[0]
+                if full.startswith("google.genai"):
+                    google_genai_hint = True
+            for m in re.finditer(r"(?m)^[ \t]*from[ \t]+([A-Za-z_][A-Za-z0-9_\.]*)[ \t]+import[ \t]+([A-Za-z_][A-Za-z0-9_]*)", src):
+                full = m.group(1)
+                base = full.split(".")[0]
                 if base:
                     import_names.add(base)
+                if full == "google" and m.group(2) == "genai":
+                    google_genai_hint = True
             # Regex heuristics for PTB
             if "telegram" in import_names or "telegram" in src:
                 if re.search(r"\bUpdater\b", src) or re.search(r"from\s+telegram\.ext\s+import\s+.*Updater", src) or ("use_context=True" in src):
