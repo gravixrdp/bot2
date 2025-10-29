@@ -15,6 +15,131 @@ from ..config import UPLOADS_DIR, RUNTIME_CPU_LIMIT, RUNTIME_MEM_LIMIT, RUNTIME_
 from ..storage import log_event, get_settings
 from .ai_assistant import suggest_fix
 
+# ---- Token discovery across workspace -----------------------------------------
+
+def collect_token_vars(workspace: str) -> List[str]:
+    """
+    Scan all .py files to collect likely token variable names and env keys.
+
+    We look for:
+    - Assignments to string literals that look like Telegram tokens (123456:ABC-DEF...)
+    - Assignments using os.getenv("NAME")
+    - Constructor calls where a Name is passed as token: Updater(...), Bot(...), TeleBot(...), Client(...)
+    - ApplicationBuilder().token(NAME)
+    - Common name patterns like TOKEN, BOT_TOKEN, TELEGRAM_TOKEN, TELEGRAM_BOT_TOKEN, API_TOKEN, MY_BOT_TOKEN
+
+    Returns a deduplicated list of names to set in runner globals and env.
+    """
+    candidates: List[str] = []
+    def _add(name: Optional[str]):
+        if not name:
+            return
+        s = str(name).strip().strip("'\"")
+        if not s:
+            return
+        import re as _re
+        if not _re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", s):
+            return
+        if s not in candidates:
+            candidates.append(s)
+
+    try:
+        for root, _, files in os.walk(workspace):
+            for f in files:
+                if not f.endswith(".py"):
+                    continue
+                p = os.path.join(root, f)
+                try:
+                    src = open(p, "r", encoding="utf-8", errors="ignore").read()
+                except Exception:
+                    src = ""
+                try:
+                    tree = ast.parse(src, filename=p)
+                except Exception:
+                    tree = None
+
+                # AST-based search
+                if tree:
+                    for node in ast.walk(tree):
+                        try:
+                            if isinstance(node, ast.Assign) and node.targets:
+                                target = node.targets[0]
+                                var_name = target.id if isinstance(target, ast.Name) else None
+                                # string literal
+                                if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                                    s = node.value.value
+                                    if re.match(r"^[0-9]+:[A-Za-z0-9_-]+$", s):
+                                        _add(var_name)
+                                # getenv
+                                elif isinstance(node.value, ast.Call):
+                                    func = node.value.func
+                                    if isinstance(func, ast.Attribute) and func.attr == "getenv":
+                                        if node.value.args and isinstance(node.value.args[0], ast.Constant) and isinstance(node.value.args[0].value, str):
+                                            _add(node.value.args[0].value)
+                                            _add(var_name)
+                                    elif isinstance(func, ast.Name) and func.id == "getenv":
+                                        if node.value.args and isinstance(node.value.args[0], ast.Constant) and isinstance(node.value.args[0].value, str):
+                                            _add(node.value.args[0].value)
+                                            _add(var_name)
+
+                            # Constructor calls
+                            if isinstance(node, ast.Call):
+                                func_name = None
+                                if isinstance(node.func, ast.Name):
+                                    func_name = node.func.id
+                                elif isinstance(node.func, ast.Attribute):
+                                    func_name = node.func.attr
+
+                                if func_name in {"Updater", "Bot", "TeleBot", "Client"}:
+                                    tok_expr = None
+                                    if node.args:
+                                        tok_expr = node.args[0]
+                                    for kw in getattr(node, "keywords", []):
+                                        if kw.arg and kw.arg.lower() == "token":
+                                            tok_expr = kw.value
+                                            break
+                                    if isinstance(tok_expr, ast.Name):
+                                        _add(tok_expr.id)
+
+                                # ApplicationBuilder().token(NAME)
+                                if isinstance(node.func, ast.Attribute) and node.func.attr == "token":
+                                    if node.args:
+                                        arg0 = node.args[0]
+                                        if isinstance(arg0, ast.Name):
+                                            _add(arg0.id)
+                        except Exception:
+                            pass
+
+                # Regex fallbacks
+                try:
+                    for m in re.finditer(r"([A-Za-z_]\w*)\s*=\s*['\"]([0-9]+:[A-Za-z0-9_-]+)['\"]", src):
+                        _add(m.group(1))
+                    for m in re.finditer(r"os\.getenv\(\s*['\"]([A-Za-z_]\w*)['\"]\s*\)", src):
+                        _add(m.group(1))
+                    # Updater/Bot variable names by regex (positional)
+                    for m in re.finditer(r"(?:Updater|Bot|TeleBot|Client)\s*\(\s*([A-Za-z_]\w*)\s*[\),]", src):
+                        _add(m.group(1))
+                    # ApplicationBuilder().token(NAME)
+                    for m in re.finditer(r"ApplicationBuilder\(\)\.token\(\s*([A-Za-z_]\w*)\s*\)", src):
+                        _add(m.group(1))
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    # Common variants
+    for common in ["TOKEN", "BOT_TOKEN", "TELEGRAM_TOKEN", "TELEGRAM_BOT_TOKEN", "API_TOKEN", "MY_BOT_TOKEN", "TG_TOKEN"]:
+        _add(common)
+
+    # Deduplicate preserving order
+    uniq = []
+    seen = set()
+    for n in candidates:
+        if n not in seen:
+            uniq.append(n)
+            seen.add(n)
+    return uniq
+
 # ---- Token rewriting utilities ------------------------------------------------
 
 _ENV_KEYS_DEFAULT = ["TELEGRAM_TOKEN", "BOT_TOKEN", "TOKEN", "TELEGRAM_BOT_TOKEN"]
