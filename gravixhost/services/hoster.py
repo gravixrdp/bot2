@@ -692,29 +692,30 @@ def detect_requirements(workspace: str) -> List[str]:
     if "telebot" in import_names:
         reqs.add("pyTelegramBotAPI")
 
-    # Choose a compatible PTB version based on hints.
-    # If PTB is already present without an explicit version operator, replace with the correct pin.
-    ptb_entries = [r for r in reqs if r.lower().startswith("python-telegram-bot")]
-    ptb_present = bool(ptb_entries)
-    needs_ptb = ("telegram" in import_names) or ptb_hint_v13 or ptb_hint_v21
-
-    if needs_ptb:
-        # Check if any entry has an explicit operator (==, >=, etc.)
-        ops = ("==", ">=", "<=", "~=", "!=", ">", "<")
-        has_explicit_pin = any(any(op in r for op in ops) for r in ptb_entries)
-
-        if not has_explicit_pin:
-            # Remove generic entries and add the correct pin
-            for r in ptb_entries:
-                try:
-                    reqs.remove(r)
-                except Exception:
-                    pass
+    # Choose a compatible PTB version; adjust unpinned entries to correct pins
+    ptb_items = [r for r in reqs if r.lower().startswith("python-telegram-bot")]
+    if ("telegram" in import_names or ptb_hint_v13 or ptb_hint_v21):
+        if not ptb_items:
+            # No explicit PTB found: add the right one
             if ptb_hint_v13 and not ptb_hint_v21:
                 reqs.add("python-telegram-bot==13.15")
             else:
-                # Default to modern API when both or none hints are present
                 reqs.add("python-telegram-bot>=21.0")
+        else:
+            # Adjust unpinned PTB lines to correct pins
+            adjusted = set()
+            for item in ptb_items:
+                low = item.lower()
+                if any(sep in low for sep in ("==", ">=", "<=", "~=", ">", "<", "!=")):
+                    adjusted.add(item)  # already pinned/has spec; keep
+                else:
+                    if ptb_hint_v13 and not ptb_hint_v21:
+                        adjusted.add("python-telegram-bot==13.15")
+                    else:
+                        adjusted.add("python-telegram-bot>=21.0")
+                reqs.discard(item)
+            for a in adjusted:
+                reqs.add(a)
         elif not ptb_present:
             # No PTB entry at all, add based on hints
             if ptb_hint_v13 and not ptb_hint_v21:
