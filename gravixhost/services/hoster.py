@@ -585,8 +585,13 @@ def detect_requirements(workspace: str) -> List[str]:
     Detect dependencies by parsing Python files with AST for import statements.
     Fall back to regex scanning if AST fails anywhere.
     Prefer to include user's requirements.txt (sanitized) so mismatches don't break builds.
+    Also attempts to choose a compatible python-telegram-bot version based on code usage:
+    - If Updater/use_context is detected -> pin to 13.15
+    - If ApplicationBuilder/filters is detected -> pin to >=21.0
     """
     import_names = set()
+    ptb_hint_v13 = False
+    ptb_hint_v21 = False
 
     def collect_imports_ast(py_path: str):
         try:
@@ -604,6 +609,12 @@ def detect_requirements(workspace: str) -> List[str]:
                         base = node.module.split(".")[0]
                         if base:
                             import_names.add(base)
+            # Heuristics for PTB major versions
+            if "telegram" in import_names or "telegram" in src:
+                if re.search(r"\bUpdater\b", src) or re.search(r"from\s+telegram\.ext\s+import\s+.*Updater", src) or ("use_context=True" in src):
+                    ptb_hint_v13 = True
+                if re.search(r"\bApplicationBuilder\b", src) or re.search(r"from\s+telegram\.ext\s+import\s+filters", src):
+                    ptb_hint_v21 = True
         except Exception:
             # Ignore parse errors in user code; we'll try regex next
             collect_imports_regex(py_path)
@@ -621,6 +632,14 @@ def detect_requirements(workspace: str) -> List[str]:
                 base = m.group(1).split(".")[0]
                 if base:
                     import_names.add(base)
+            # Regex heuristics for PTB
+            if "telegram" in import_names or "telegram" in src:
+                if re.search(r"\bUpdater\b", src) or re.search(r"from\s+telegram\.ext\s+import\s+.*Updater", src) or ("use_context=True" in src):
+                    nonlocal ptb_hint_v13
+                    ptb_hint_v13 = True
+                if re.search(r"\bApplicationBuilder\b", src) or re.search(r"from\s+telegram\.ext\s+import\s+filters", src):
+                    nonlocal ptb_hint_v21
+                    ptb_hint_v21 = True
         except Exception:
             pass
 
@@ -659,8 +678,15 @@ def detect_requirements(workspace: str) -> List[str]:
     # Ensure explicit mappings for detected frameworks are present, even if not imported at top-level
     if "telebot" in import_names:
         reqs.add("pyTelegramBotAPI")
-    if "telegram" in import_names:
-        reqs.add("python-telegram-bot>=21.0")
+
+    # Choose a compatible PTB version based on hints; don't override explicit user pin
+    has_ptb = any(r.lower().startswith("python-telegram-bot") for r in reqs)
+    if ("telegram" in import_names or ptb_hint_v13 or ptb_hint_v21) and not has_ptb:
+        if ptb_hint_v13 and not ptb_hint_v21:
+            reqs.add("python-telegram-bot==13.15")
+        else:
+            # Default to modern API
+            reqs.add("python-telegram-bot>=21.0")
 
     return sorted(reqs)
 
