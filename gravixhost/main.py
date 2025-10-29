@@ -49,6 +49,7 @@ class HostStates(StatesGroup):
     waiting_name = State()
     waiting_token = State()
     waiting_requirements = State()
+    waiting_google_key = State()
 
 
 class ContactStates(StatesGroup):
@@ -775,7 +776,7 @@ async def handle_upload(message: Message, state: FSMContext):
             + "\nSend " + code("requirements: none") + " or " + code("skip") + " if everything is OK."
         )
         await message.answer(
-            f"✅ Analyzed your code.\\n\\nFramework: {framework}\\nToken var: {token_var}\\n\\n{instruction}",
+            f"✅ Analyzed your code.\n\nFramework: {framework}\nToken var: {token_var}\n\n{instruction}",
             reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
             parse_mode=ParseMode.HTML,
         )
@@ -877,6 +878,16 @@ async def handle_requirements(message: Message, state: FSMContext):
     cp["reqs"] = final
     await state.update_data(code_pipeline=cp)
 
+    # If google-genai is required, ask for API key first
+    if any(r.lower().startswith("google-genai") for r in final):
+        await message.answer(
+            "🔑 Detected Google Generative AI usage.\nPlease send your Google API key (will be used as " + code("GOOGLE_API_KEY") + ").",
+            reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
+            parse_mode=ParseMode.HTML,
+        )
+        await state.set_state(HostStates.waiting_google_key)
+        return
+
     # Next: ask for bot token
     await message.answer(
         "🔐 Please send your bot token (e.g. " + code("123456:ABC-DEF...") + ")",
@@ -893,6 +904,30 @@ async def handle_requirements_nontext(message: Message):
         parse_mode=ParseMode.HTML,
     )
 
+
+@router.message(HostStates.waiting_google_key, F.text)
+async def handle_google_key(message: Message, state: FSMContext):
+    key = (message.text or "").strip()
+    if not key:
+        await message.answer(
+            "⚠️ Please send a valid Google API key.",
+            reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    data = await state.get_data()
+    cp = dict(data.get("code_pipeline") or {})
+    extra_env = dict(cp.get("extra_env") or {})
+    extra_env["GOOGLE_API_KEY"] = key
+    cp["extra_env"] = extra_env
+    await state.update_data(code_pipeline=cp)
+
+    await message.answer(
+        "🔐 Please send your bot token (e.g. " + code("123456:ABC-DEF...") + ")",
+        reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
+        parse_mode=ParseMode.HTML,
+    )
+    await state.set_state(HostStates.waiting_token)
 
 @router.message(HostStates.waiting_name, F.text)
 async def handle_app_name(message: Message, state: FSMContext):
@@ -920,6 +955,7 @@ async def handle_app_name(message: Message, state: FSMContext):
         token_var = cp.get("token_var") or "TOKEN"
         reqs = cp.get("reqs") or []
         token = cp.get("token") or ""
+        extra_env = dict(cp.get("extra_env") or {})
 
         # Enforce plan constraints
         if not can_host_more(message.from_user.id):
@@ -937,7 +973,7 @@ async def handle_app_name(message: Message, state: FSMContext):
         await message.answer("🔄 Deploying... Please wait 2-5 minutes", parse_mode=ParseMode.HTML)
         from .services.hoster import build_and_run_from_code
         ok, runtime_id, err = build_and_run_from_code(
-            message.from_user.id, name, code_text, reqs, framework, token_var, token
+            message.from_user.id, name, code_text, reqs, framework, token_var, token, extra_env=extra_env
         )
         if not ok:
             await message.answer(f"❌ Failed!\n\n{err or 'Unknown error'}", parse_mode=ParseMode.HTML)

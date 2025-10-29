@@ -671,6 +671,7 @@ def build_and_run_from_code(
     framework: str,
     token_var: str,
     token: str,
+    extra_env: Optional[dict] = None,
 ) -> Tuple[bool, Optional[str], Optional[str]]:
     temp_dir = None
     client = docker_from_env()
