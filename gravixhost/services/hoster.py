@@ -327,7 +327,19 @@ def save_upload(user_id: int, bot_id: str, file_name: str, content: bytes) -> st
     if file_name.lower().endswith(".zip"):
         import zipfile
         with zipfile.ZipFile(file_path, "r") as zip_ref:
-            zip_ref.extractall(path)
+            # Prevent Zip Slip: ensure all members extract within 'path'
+            for member in zip_ref.infolist():
+                member_path = os.path.join(path, member.filename)
+                if not os.path.realpath(member_path).startswith(os.path.realpath(path) + os.sep) and os.path.realpath(member_path) != os.path.realpath(path):
+                    # Skip unsafe entry
+                    continue
+                # Create parent dirs and write file/dir
+                if member.is_dir():
+                    os.makedirs(os.path.realpath(member_path), exist_ok=True)
+                else:
+                    os.makedirs(os.path.dirname(os.path.realpath(member_path)), exist_ok=True)
+                    with zip_ref.open(member, "r") as src, open(os.path.realpath(member_path), "wb") as dst:
+                        shutil.copyfileobj(src, dst)
         os.remove(file_path)
     return path
 
@@ -510,11 +522,11 @@ def write_runner_and_dockerfile(workspace: str, entry: Optional[str] = None, req
     runner_py = os.path.join(workspace, "gravix_runner.py")
     token_vars_literal = "[" + ",".join(repr(n) for n in token_vars) + "]"
 
-    # Build runner code using a single safe template to avoid quoting/escape issues
+    # Build runner code using a single safe template and explicit placeholder replacement
     runner_tpl = """import os, runpy, sys, subprocess, threading, time, re, pathlib
 
 token = os.getenv('TELEGRAM_TOKEN') or os.getenv('BOT_TOKEN') or os.getenv('TOKEN') or os.getenv('TELEGRAM_BOT_TOKEN') or ''
-token_vars = {token_vars}
+token_vars = __TOKEN_VARS__
 
 # Expose token in env under common names and discovered names
 for name in set(token_vars + ['BOT_TOKEN', 'TOKEN', 'TELEGRAM_TOKEN', 'TELEGRAM_BOT_TOKEN']):
@@ -531,7 +543,7 @@ for name in set(token_vars + ['BOT_TOKEN', 'TOKEN', 'TELEGRAM_TOKEN', 'TELEGRAM_
 os.chdir(os.path.dirname(__file__))
 
 try:
-    _SRC = pathlib.Path('{entry_file}').read_text(encoding='utf-8', errors='ignore')
+    _SRC = pathlib.Path('__ENTRY_FILE__').read_text(encoding='utf-8',rrors='ignore')
 except Exception:
     _SRC = ''
 
@@ -667,7 +679,7 @@ def _try_run() -> bool:
             return True
     return False
 
-print('gravix_runner: entry={{}} token_len={{}}'.format('{entry_file}', len(token)))
+print('gravix_runner: entry={{}} token_len={{}}'.format('__ENTRY_FILE__', len(token)
 
 while True:
     try:
