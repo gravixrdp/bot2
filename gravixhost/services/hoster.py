@@ -509,196 +509,212 @@ def write_runner_and_dockerfile(workspace: str, entry: Optional[str] = None, req
         token_vars = ["TOKEN", "BOT_TOKEN", "TELEGRAM_TOKEN", "TELEGRAM_BOT_TOKEN"]
     runner_py = os.path.join(workspace, "gravix_runner.py")
     token_vars_literal = "[" + ",".join(repr(n) for n in token_vars) + "]"
-    runner_code = (
-        "import os, runpy, sys, subprocess, threading, time, re, pathlib\n\n"
-        "token = os.getenv('TELEGRAM_TOKEN') or os.getenv('BOT_TOKEN') or os.getenv('TOKEN') or os.getenv('TELEGRAM_BOT_TOKEN') or ''\n"
-        f"token_vars = {token_vars_literal}\n"
-        "# Expose token in env under common names and discovered names\n"
-        "for name in set(token_vars + ['BOT_TOKEN', 'TOKEN', 'TELEGRAM_TOKEN', 'TELEGRAM_BOT_TOKEN']):\n"
-        "    try:\n"
-        "        os.environ[name] = token\n"
-        "    except Exception:\n"
-        "        pass\n"
-        "# Prepare globals so user code can reference these directly\n"
-        "init_globals = {}\n"
-        "for name in set(token_vars + ['BOT_TOKEN', 'TOKEN', 'TELEGRAM_TOKEN', 'TELEGRAM_BOT_TOKEN']):\n"
-        "    init_globals[name] = token\n"
-        "os.chdir(os.path.dirname(__file__))\n\n"
-        "try:\n"
-        "    _SRC = pathlib.Path('" + entry_file + "').read_text(encoding='utf-8', errors='ignore')\n"
-        "except Exception:\n"
-        "    _SRC = ''\n\n"
-        "def _heartbeat():\n"
-        "    while True:\n"
-        "        try:\n"
-        "            print('gravix_runner: heartbeat alive')\n"
-        "        except Exception:\n"
-        "            pass\n"
-        "        time.sleep(30)\n"
-        "threading.Thread(target=_heartbeat, daemon=True).start()\n\n"
-        "def _auto_install_for_missing(missing: str) -> bool:\n"
-        "    base = (missing or '').split('.')[0]\n"
-        "    M = {\n"
-        "        'telebot': 'pyTelegramBotAPI',\n"
-        "        'telegram': 'python-telegram-bot',\n"
-        "        'PIL': 'pillow',\n"
-        "        'cv2': 'opencv-python',\n"
-        "        'bs4': 'beautifulsoup4',\n"
-        "        'yaml': 'pyyaml',\n"
-        "        'dotenv': 'python-dotenv',\n"
-        "        'Crypto': 'pycryptodome',\n"
-        "        'OpenSSL': 'pyOpenSSL',\n"
-        "        'lxml': 'lxml',\n"
-        "        'requests': 'requests',\n"
-        "        'aiohttp': 'aiohttp',\n"
-        "        'pytz': 'pytz',\n"
-        "        'tornado': 'tornado',\n"
-        "        'apscheduler': 'APScheduler',\n"
-        "        'APScheduler': 'APScheduler',\n"
-        "        'cryptography': 'cryptography',\n"
-        "        'certifi': 'certifi',\n"
-        "        'charset_normalizer': 'charset-normalizer',\n"
-        "        'idna': 'idna',\n"
-        "        'urllib3': 'urllib3',\n"
-        "        'numpy': 'numpy',\n"
-        "        'pandas': 'pandas',\n"
-        "        'matplotlib': 'matplotlib',\n"
-        "        'scipy': 'scipy',\n"
-        "        'pyyaml': 'pyyaml',\n"
-        "        'google.genai': 'google-genai',\n"
-        "        'google': 'google-genai' if ('google.genai' in _SRC or re.search(r'from\\s+google\\s+import\\s+genai', _SRC)) else None,\n"
-        "    }\n"
-        "    candidates = []\n"
-        "    mapped_full = M.get(missing)\n"
-        "    if mapped_full:\n"
-        "        candidates.append(mapped_full)\n"
-        "    mapped_base = M.get(base)\n"
-        "    if mapped_base and mapped_base not in candidates:\n"
-        "        candidates.append(mapped_base)\n"
-        "    if missing and missing not in candidates:\n"
-        "        candidates.append(missing)\n"
-        "    if base and base not in candidates:\n"
-        "        candidates.append(base)\n"
-        "    for pkg in candidates:\n"
-        "        if not pkg:\n"
-        "            continue\n"
-        "        try:\n"
-        "            print(f'gravix_runner: installing {pkg} for missing import {missing}')\n"
-        "            subprocess.check_call([sys.executable, '-m', 'pip', 'install', pkg])\n"
-        "            return True\n"
-        "        except Exception as _e:\n"
-        "            print(f'gravix_runner: failed to install {pkg}: {_e}')\n"
-        "            continue\n"
-        "    return False\n\n"
-        "def _auto_start_from_namespace(ns: dict) -> bool:\n"
-        "    \"\"\"\n"
-        "    Best-effort autostart for common frameworks if user script didn't start polling itself.\n"
-        "    - python-telegram-bot v21+: ns['application'].run_polling()\n"
-        "    - python-telegram-bot v13: ns['updater'].start_polling(); ns['updater'].idle()\n"
-        "    - pyTelegramBotAPI: ns['bot'].infinity_polling() or .polling()\n"
-        "    - pyrogram: ns['app'] or ns['client'] with .run() or .start() + idle loop\n"
-        "    Returns True if something was started.\n"
-        "    \"\"\"\n"
-        "    obj = ns.get('application')\n"
-        "    try:\n"
-        "        if obj and hasattr(obj, 'run_polling') and callable(obj.run_polling):\n"
-        "            print('gravix_runner: autostart — application.run_polling()')\n"
-        "            obj.run_polling()\n"
-        "            return True\n"
-        "    except Exception:\n"
-        "        pass\n"
-        "    obj = ns.get('updater')\n"
-        "    try:\n"
-        "        if obj and hasattr(obj, 'start_polling'):\n"
-        "            print('gravix_runner: autostart — updater.start_polling()')\n"
-        "            obj.start_polling()\n"
-        "            if hasattr(obj, 'idle') and callable(obj.idle):\n"
-        "                obj.idle()\n"
-        "            else:\n"
-        "                while True:\n"
-        "                    time.sleep(60)\n"
-        "            return True\n"
-        "    except Exception:\n"
-        "        pass\n"
-        "    obj = ns.get('bot')\n"
-        "    try:\n"
-        "        if obj and hasattr(obj, 'infinity_polling') and callable(obj.infinity_polling):\n"
-        "            print('gravix_runner: autostart — bot.infinity_polling()')\n"
-        "            obj.infinity_polling()\n"
-        "            return True\n"
-        "        if obj and hasattr(obj, 'polling') and callable(obj.polling):\n"
-        "            print('gravix_runner: autostart — bot.polling()')\n"
-        "            obj.polling()\n"
-        "            return True\n"
-        "    except Exception:\n"
-        "        pass\n"
-        "    for name in ('app', 'client'):\n"
-        "        obj = ns.get(name)\n"
-        "        try:\n"
-        "            if obj and hasattr(obj, 'run') and callable(obj.run):\n"
-        "                print(f'gravix_runner: autostart — {name}.run()')\n"
-        "                obj.run()\n"
-        "                return True\n"
-        "            if obj and hasattr(obj, 'start') and callable(obj.start):\n"
-        "                print(f'gravix_runner: autostart — {name}.start() + idle loop')\n"
-        "                obj.start()\n"
-        "                while True:\n"
-        "                    time.sleep(60)\n"
-        "                return True\n"
-        "        except Exception:\n"
-        "            pass\n"
-        "    return False\n\n"
-        "def _try_run() -> bool:\n"
-        "    ns = runpy.run_path('" + entry_file + "', init_globals=init_globals)\n"
-        "    if isinstance(ns, dict):\n"
-        "        started = _auto_start_from_namespace(ns)\n"
-        "        if started:\n"
-        "            return True\n"
-        "    return False\n\n"
-        "print('gravix_runner: entry=" + entry_file + " token_len=%d' % (len(token)))\n\n"
-        "while True:\n"
-        "    try:\n"
-        "        if _try_run():\n"
-        "            # If autostart engaged, we only reach here on termination\n"
-        "            print('gravix_runner: autostarted service terminated')\n"
-        "            sys.exit(0)\n"
-        "        else:\n"
-        "            print('gravix_runner: user script finished (no long-running loop)')\n"
-        "            sys.exit(0)\n"
-        "    except ImportError as e:\n"
-        "        msg = str(e)\n"
-        "        if 'telegram.ext' in msg and ('Filters' in msg or 'Updater' in msg):\n"
-        "            try:\n"
-        "                print('gravix_runner: detected PTB API mismatch, installing python-telegram-bot==13.15')\n"
-        "                subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'python-telegram-bot==13.15'])\n"
-        "                continue\n"
-        "            except Exception:\n"
-        "                import traceback; traceback.print_exc(); sys.exit(1)\n"
-        "        missing = getattr(e, 'name', None)\n"
-        "        if not missing and 'No module named' in msg:\n"
-        "            m = re.search(r\\\"No module named ['\\\\\\\"]([^'\\\\\\\"]+)['\\\\\\\"]\\\", msg)\n"
-        "            if m:\n"
-        "                missing = m.group(1)\n"
-        "        if missing and _auto_install_for_missing(missing):\n"
-        "            continue\n"
-        "        raise\n"
-        "    except ModuleNotFoundError as e:\n"
-        "        missing = getattr(e, 'name', None)\n"
-        "        if not missing and 'No module named' in str(e):\n"
-        "            m = re.search(r\\\"No module named ['\\\\\\\"]([^'\\\\\\\"]+)['\\\\\\\"]\\\", str(e))\n"
-        "            if m:\n"
-        "                missing = m.group(1)\n"
-        "        if missing and _auto_install_for_missing(missing):\n"
-        "            continue\n"
-        "        else:\n"
-        "            raise\n"
-        "    except SystemExit:\n"
-        "        raise\n"
-        "    except Exception:\n"
-        "        import traceback\n"
-        "        traceback.print_exc()\n"
-        "        sys.exit(1)\\n\"\n    )\n    with open(runner_py, "w", encoding="utf-8", newline="\\n") as f:\n        f.write(runner_code)\n\n    dockerfile = os.path.join(workspace, "Dockerfile")\ns.exit(1)\n"
-    ) as f:
+
+    # Build runner code using a single safe template to avoid quoting/escape issues
+    runner_tpl = """import os, runpy, sys, subprocess, threading, time, re, pathlib
+
+token = os.getenv('TELEGRAM_TOKEN') or os.getenv('BOT_TOKEN') or os.getenv('TOKEN') or os.getenv('TELEGRAM_BOT_TOKEN') or ''
+token_vars = {token_vars}
+
+# Expose token in env under common names and discovered names
+for name in set(token_vars + ['BOT_TOKEN', 'TOKEN', 'TELEGRAM_TOKEN', 'TELEGRAM_BOT_TOKEN']):
+    try:
+        os.environ[name] = token
+    except Exception:
+        pass
+
+# Prepare globals so user code can reference these directly
+init_globals = {}
+for name in set(token_vars + ['BOT_TOKEN', 'TOKEN', 'TELEGRAM_TOKEN', 'TELEGRAM_BOT_TOKEN']):
+    init_globals[name] = token
+
+os.chdir(os.path.dirname(__file__))
+
+try:
+    _SRC = pathlib.Path('{entry_file}').read_text(encoding='utf-8', errors='ignore')
+except Exception:
+    _SRC = ''
+
+def _heartbeat():
+    while True:
+        try:
+            print('gravix_runner: heartbeat alive')
+        except Exception:
+            pass
+        time.sleep(30)
+
+threading.Thread(target=_heartbeat, daemon=True).start()
+
+def _auto_install_for_missing(missing: str) -> bool:
+    base = (missing or '').split('.')[0]
+    M = {{
+        'telebot': 'pyTelegramBotAPI',
+        'telegram': 'python-telegram-bot',
+        'PIL': 'pillow',
+        'cv2': 'opencv-python',
+        'bs4': 'beautifulsoup4',
+        'yaml': 'pyyaml',
+        'dotenv': 'python-dotenv',
+        'Crypto': 'pycryptodome',
+        'OpenSSL': 'pyOpenSSL',
+        'lxml': 'lxml',
+        'requests': 'requests',
+        'aiohttp': 'aiohttp',
+        'pytz': 'pytz',
+        'tornado': 'tornado',
+        'apscheduler': 'APScheduler',
+        'APScheduler': 'APScheduler',
+        'cryptography': 'cryptography',
+        'certifi': 'certifi',
+        'charset_normalizer': 'charset-normalizer',
+        'idna': 'idna',
+        'urllib3': 'urllib3',
+        'numpy': 'numpy',
+        'pandas': 'pandas',
+        'matplotlib': 'matplotlib',
+        'scipy': 'scipy',
+        'pyyaml': 'pyyaml',
+        'google.genai': 'google-genai',
+        'google': 'google-genai' if ('google.genai' in _SRC or re.search(r'from\\s+google\\s+import\\s+genai', _SRC)) else None,
+    }}
+    candidates = []
+    mapped_full = M.get(missing)
+    if mapped_full:
+        candidates.append(mapped_full)
+    mapped_base = M.get(base)
+    if mapped_base and mapped_base not in candidates:
+        candidates.append(mapped_base)
+    if missing and missing not in candidates:
+        candidates.append(missing)
+    if base and base not in candidates:
+        candidates.append(base)
+    for pkg in candidates:
+        if not pkg:
+            continue
+        try:
+            print('gravix_runner: installing {{}} for missing import {{}}'.format(pkg, missing))
+            subprocess.check_call([sys.executable, '-m', 'pip', 'install', pkg])
+            return True
+        except Exception as _e:
+            print('gravix_runner: failed to install {{}}: {{}}'.format(pkg, _e))
+            continue
+    return False
+
+def _auto_start_from_namespace(ns: dict) -> bool:
+    \"\"\"
+    Best-effort autostart for common frameworks if user script didn't start polling itself.
+    - python-telegram-bot v21+: ns['application'].run_polling()
+    - python-telegram-bot v13: ns['updater'].start_polling(); ns['updater'].idle()
+    - pyTelegramBotAPI: ns['bot'].infinity_polling() or .polling()
+    - pyrogram: ns['app'] or ns['client'] with .run() or .start() + idle loop
+    Returns True if something was started.
+    \"\"\"
+    obj = ns.get('application')
+    try:
+        if obj and hasattr(obj, 'run_polling') and callable(obj.run_polling):
+            print('gravix_runner: autostart — application.run_polling()')
+            obj.run_polling()
+            return True
+    except Exception:
+        pass
+    obj = ns.get('updater')
+    try:
+        if obj and hasattr(obj, 'start_polling'):
+            print('gravix_runner: autostart — updater.start_polling()')
+            obj.start_polling()
+            if hasattr(obj, 'idle') and callable(obj.idle):
+                obj.idle()
+            else:
+                while True:
+                    time.sleep(60)
+            return True
+    except Exception:
+        pass
+    obj = ns.get('bot')
+    try:
+        if obj and hasattr(obj, 'infinity_polling') and callable(obj.infinity_polling):
+            print('gravix_runner: autostart — bot.infinity_polling()')
+            obj.infinity_polling()
+            return True
+        if obj and hasattr(obj, 'polling') and callable(obj.polling):
+            print('gravix_runner: autostart — bot.polling()')
+            obj.polling()
+            return True
+    except Exception:
+        pass
+    for name in ('app', 'client'):
+        obj = ns.get(name)
+        try:
+            if obj and hasattr(obj, 'run') and callable(obj.run):
+                print('gravix_runner: autostart — {{}}.run()'.format(name))
+                obj.run()
+                return True
+            if obj and hasattr(obj, 'start') and callable(obj.start):
+                print('gravix_runner: autostart — {{}}.start() + idle loop'.format(name))
+                obj.start()
+                while True:
+                    time.sleep(60)
+                return True
+        except Exception:
+            pass
+    return False
+
+def _try_run() -> bool:
+    ns = runpy.run_path('{entry_file}', init_globals=init_globals)
+    if isinstance(ns, dict):
+        started = _auto_start_from_namespace(ns)
+        if started:
+            return True
+    return False
+
+print('gravix_runner: entry={{}} token_len={{}}'.format('{entry_file}', len(token)))
+
+while True:
+    try:
+        if _try_run():
+            # If autostart engaged, we only reach here on termination
+            print('gravix_runner: autostarted service terminated')
+            sys.exit(0)
+        else:
+            print('gravix_runner: user script finished (no long-running loop)')
+            sys.exit(0)
+    except ImportError as e:
+        msg = str(e)
+        if 'telegram.ext' in msg and ('Filters' in msg or 'Updater' in msg):
+            try:
+                print('gravix_runner: detected PTB API mismatch, installing python-telegram-bot==13.15')
+                subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'python-telegram-bot==13.15'])
+                continue
+            except Exception:
+                import traceback; traceback.print_exc(); sys.exit(1)
+        missing = getattr(e, 'name', None)
+        if not missing and 'No module named' in msg:
+            m = re.search(r"No module named ['\\\"]([^'\\\"]+)['\\\"]", msg)
+            if m:
+                missing = m.group(1)
+        if missing and _auto_install_for_missing(missing):
+            continue
+        raise
+    except ModuleNotFoundError as e:
+        missing = getattr(e, 'name', None)
+        if not missing and 'No module named' in str(e):
+            m = re.search(r"No module named ['\\\"]([^'\\\"]+)['\\\"]", str(e))
+            if m:
+                missing = m.group(1)
+        if missing and _auto_install_for_missing(missing):
+            continue
+        else:
+            raise
+    except SystemExit:
+        raise
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+"""
+    runner_code = runner_tpl.format(entry_file=entry_file, token_vars=token_vars_literal)
+
+    with open(runner_py, "w", encoding="utf-8", newline="\n") as f:
         f.write(runner_code)
 
     dockerfile = os.path.join(workspace, "Dockerfile")
