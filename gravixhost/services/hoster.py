@@ -604,11 +604,11 @@ def _auto_install_for_missing(missing: str) -> bool:
         if not pkg:
             continue
         try:
-            print('gravix_runner: installing {{}} for missing import {{}}'.format(pkg, missing))
+            print(f'gravix_runner: installing {pkg} for missing import {missing}')
             subprocess.check_call([sys.executable, '-m', 'pip', 'install', pkg])
             return True
         except Exception as _e:
-            print('gravix_runner: failed to install {{}}: {{}}'.format(pkg, _e))
+            print(f'gravix_runner: failed to install {pkg}: {_e}')
             continue
     return False
 
@@ -658,11 +658,11 @@ def _auto_start_from_namespace(ns: dict) -> bool:
         obj = ns.get(name)
         try:
             if obj and hasattr(obj, 'run') and callable(obj.run):
-                print('gravix_runner: autostart — {{}}.run()'.format(name))
+                print(f'gravix_runner: autostart — {name}.run()')
                 obj.run()
                 return True
             if obj and hasattr(obj, 'start') and callable(obj.start):
-                print('gravix_runner: autostart — {{}}.start() + idle loop'.format(name))
+                print(f'gravix_runner: autostart — {name}.start() + idle loop')
                 obj.start()
                 while True:
                     time.sleep(60)
@@ -679,7 +679,7 @@ def _try_run() -> bool:
             return True
     return False
 
-print('gravix_runner: entry={{}} token_len={{}}'.format('__ENTRY_FILE__', len(token)
+print(f"gravix_runner: entry __ENTRY_FILE__ token_len={len(token)}")ntry={{}} token_len={{}}'.format('__ENTRY_FILE__', len(token)
 
 while True:
     try:
