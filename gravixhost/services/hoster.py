@@ -522,7 +522,7 @@ def write_runner_and_dockerfile(workspace: str, entry: Optional[str] = None, req
     runner_py = os.path.join(workspace, "gravix_runner.py")
     token_vars_literal = "[" + ",".join(repr(n) for n in token_vars) + "]"
 
-    # Build runner code using a single safe template and explicit placeholder replacement
+    # Build runner code using a safe template and literal placeholder replacement (no .format on the template)
     runner_tpl = """import os, runpy, sys, subprocess, threading, time, re, pathlib
 
 token = os.getenv('TELEGRAM_TOKEN') or os.getenv('BOT_TOKEN') or os.getenv('TOKEN') or os.getenv('TELEGRAM_BOT_TOKEN') or ''
@@ -543,7 +543,7 @@ for name in set(token_vars + ['BOT_TOKEN', 'TOKEN', 'TELEGRAM_TOKEN', 'TELEGRAM_
 os.chdir(os.path.dirname(__file__))
 
 try:
-    _SRC = pathlib.Path('__ENTRY_FILE__').read_text(encoding='utf-8',rrors='ignore')
+    _SRC = pathlib.Path('__ENTRY_FILE__').read_text(encoding='utf-8', errors='ignore')
 except Exception:
     _SRC = ''
 
@@ -559,7 +559,7 @@ threading.Thread(target=_heartbeat, daemon=True).start()
 
 def _auto_install_for_missing(missing: str) -> bool:
     base = (missing or '').split('.')[0]
-    M = {{
+    M = {
         'telebot': 'pyTelegramBotAPI',
         'telegram': 'python-telegram-bot',
         'PIL': 'pillow',
@@ -588,7 +588,7 @@ def _auto_install_for_missing(missing: str) -> bool:
         'pyyaml': 'pyyaml',
         'google.genai': 'google-genai',
         'google': 'google-genai' if ('google.genai' in _SRC or re.search(r'from\\s+google\\s+import\\s+genai', _SRC)) else None,
-    }}
+    }
     candidates = []
     mapped_full = M.get(missing)
     if mapped_full:
@@ -672,14 +672,14 @@ def _auto_start_from_namespace(ns: dict) -> bool:
     return False
 
 def _try_run() -> bool:
-    ns = runpy.run_path('{entry_file}', init_globals=init_globals)
+    ns = runpy.run_path('__ENTRY_FILE__', init_globals=init_globals)
     if isinstance(ns, dict):
         started = _auto_start_from_namespace(ns)
         if started:
             return True
     return False
 
-print(f"gravix_runner: entry __ENTRY_FILE__ token_len={len(token)}")ntry={{}} token_len={{}}'.format('__ENTRY_FILE__', len(token)
+print(f"gravix_runner: entry __ENTRY_FILE__ token_len={len(token)}")
 
 while True:
     try:
@@ -724,7 +724,8 @@ while True:
         traceback.print_exc()
         sys.exit(1)
 """
-    runner_code = runner_tpl.format(entry_file=entry_file, token_vars=token_vars_literal)
+    # Replace placeholders safely without invoking str.format on the template
+    runner_code = runner_tpl.replace("__ENTRY_FILE__", entry_file).replace("__TOKEN_VARS__", token_vars_literal)
 
     with open(runner_py, "w", encoding="utf-8", newline="\n") as f:
         f.write(runner_code)
@@ -736,234 +737,3 @@ while True:
         f.write("COPY . /app\n")
         f.write("RUN apt-get update && apt-get install -y --no-install-recommends build-essential && rm -rf /var/lib/apt/lists/*\n")
         f.write("RUN pip install --no-cache-dir --upgrade pip\n")
-        if requirements:
-            req_auto_path = os.path.join(workspace, "requirements.autodetected.txt")
-            with open(req_auto_path, "w", encoding="utf-8", newline="\n") as rf:
-                rf.write("\n".join(requirements))
-            f.write("RUN pip install -r requirements.autodetected.txt\n")
-        f.write("RUN if [ -f requirements.txt ]; then pip install -r requirements.txt; fi\n")
-        f.write("ENV PYTHONUNBUFFERED=1 PYTHONPATH=/app\n")
-        f.write('CMD ["python", "/app/gravix_runner.py"]\n')
-
-# ---- Docker availability ------------------------------------------------------
-
-def _docker_available() -> bool:
-    try:
-        client = docker_from_env()
-        client.ping()
-        return True
-    except Exception:
-        return False
-
-# ---- Single-file build and run ------------------------------------------------
-
-def build_and_run_from_code(
-    uid: int,
-    name: str,
-    code: str,
-    reqs: List[str],
-    framework: str,
-    token_var: str,
-    token: str,
-    extra_env: Optional[dict] = None,
-) -> Tuple[bool, Optional[str], Optional[str]]:
-    temp_dir = None
-    client = docker_from_env()
-    try:
-        temp_dir = tempfile.mkdtemp()
-        with open(os.path.join(temp_dir, "bot.py"), "w", encoding="utf-8") as f:
-            try:
-                candidate_vars = collect_token_vars(temp_dir)
-            except Exception:
-                candidate_vars = [token_var]
-            f.write(rewrite_token_in_code(code, env_keys=_ENV_KEYS_DEFAULT, candidate_vars=candidate_vars))
-        with open(os.path.join(temp_dir, "requirements.txt"), "w", encoding="utf-8") as f:
-            f.write("\n".join(reqs) if reqs else "")
-        write_runner_and_dockerfile(temp_dir, entry="bot.py", requirements=reqs)
-
-        image_tag = f"hostbot_{uid}_{name}_{int(time.time())}".lower().replace(" ", "_").replace("-", "_")
-        container_name = image_tag
-
-        client.images.build(path=temp_dir, tag=image_tag, rm=True)
-
-        network = RUNTIME_NETWORK
-        if network:
-            try:
-                nets = client.networks.list(names=[network])
-                if not nets:
-                    client.networks.create(name=network)
-                    log_event(f"Created missing Docker network: {network}")
-            except Exception:
-                log_event(f"Could not verify/create network '{network}', proceeding with defaults.")
-                network = None
-
-        container = client.containers.run(
-            image_tag,
-            name=container_name,
-            detach=True,
-            environment={
-                "TELEGRAM_TOKEN": token,
-                "BOT_TOKEN": token,
-                "TOKEN": token,
-                "TELEGRAM_BOT_TOKEN": token,
-            },
-            cpu_quota=DEFAULT_CPU_QUOTA,
-            mem_limit=DEFAULT_MEM_LIMIT,
-            pids_limit=DEFAULT_PIDS_LIMIT,
-            network=network if network else None,
-            restart_policy={"Name": "no"},
-        )
-        rid = container.id
-        if temp_dir:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-        return True, rid, None
-    except Exception as e:
-        if temp_dir:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-        return False, None, f"{str(e)[:200]}"
-
-# ---- Full workspace build and run --------------------------------------------
-
-def build_and_run(user_id: int, bot_id: str, token: str, workspace: str, entry: Optional[str] = None) -> Tuple[bool, Optional[str], Optional[str]]:
-    if not _docker_available():
-        log_event("Docker not available. Aborting deployment.")
-        return False, None, "docker_unavailable"
-
-    code = None
-    entry_file = entry
-    try:
-        if not entry_file:
-            candidate = os.path.join(workspace, "bot.py")
-            if os.path.exists(candidate):
-                entry_file = "bot.py"
-            else:
-                for f in os.listdir(workspace):
-                    if f.endswith(".py"):
-                        entry_file = f
-                        break
-        if entry_file:
-            code = open(os.path.join(workspace, entry_file), "r", encoding="utf-8", errors="ignore").read()
-    except Exception:
-        code = None
-
-    if not code:
-        return False, None, "no_entry_py"
-
-    framework, candidate_names = detect_framework(code)
-    try:
-        full_reqs = detect_requirements(workspace)
-    except Exception:
-        full_reqs = []
-    reqs = full_reqs or (["python-telegram-bot>=21.0"] if framework == "python-telegram-bot" else [])
-
-    temp_dir = None
-    client = docker_from_env()
-    try:
-        temp_dir = tempfile.mkdtemp()
-        try:
-            code = rewrite_token_in_code(code, env_keys=_ENV_KEYS_DEFAULT, candidate_vars=candidate_names)
-        except Exception:
-            pass
-        with open(os.path.join(temp_dir, "bot.py"), "w", encoding="utf-8") as f:
-            f.write(code)
-        with open(os.path.join(temp_dir, "requirements.txt"), "w", encoding="utf-8") as f:
-            f.write("\n".join(reqs) if reqs else "")
-        write_runner_and_dockerfile(temp_dir, entry="bot.py", requirements=reqs)
-
-        image_tag = f"hostbot_{user_id}_{bot_id}_{int(time.time())}".lower().replace(" ", "_").replace("-", "_")
-        container_name = image_tag
-
-        client.images.build(path=temp_dir, tag=image_tag, rm=True)
-
-        network = RUNTIME_NETWORK
-        if network:
-            try:
-                nets = client.networks.list(names=[network])
-                if not nets:
-                    client.networks.create(name=network)
-                    log_event(f"Created missing Docker network: {network}")
-            except Exception:
-                log_event(f"Could not verify/create network '{network}', proceeding with defaults.")
-                network = None
-
-        container = client.containers.run(
-            image_tag,
-            name=container_name,
-            detach=True,
-            environment={
-                "TELEGRAM_TOKEN": token,
-                "BOT_TOKEN": token,
-                "TOKEN": token,
-                "TELEGRAM_BOT_TOKEN": token,
-            },
-            cpu_quota=DEFAULT_CPU_QUOTA,
-            mem_limit=DEFAULT_MEM_LIMIT,
-            pids_limit=DEFAULT_PIDS_LIMIT,
-            network=network if network else None,
-            restart_policy={"Name": "no"},
-        )
-        runtime_id = container.id
-        log_event(f"Runtime started {runtime_id} for {bot_id} (framework={framework})")
-        if temp_dir:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-        return True, runtime_id, None
-    except docker_errors.BuildError:
-        return False, None, "build_error"
-    except Exception as e:
-        log_event(f"Build/run failed for {bot_id}: {e}")
-        return False, None, str(e)
-    finally:
-        if temp_dir:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-
-# ---- Runtime helpers ----------------------------------------------------------
-
-def stop_runtime(runtime_id: str) -> bool:
-    try:
-        client = docker_from_env()
-        try:
-            client.api.stop(runtime_id, timeout=10)
-        except Exception:
-            pass
-        try:
-            client.api.remove_container(runtime_id, force=True)
-        except Exception:
-            pass
-        return True
-    except Exception:
-        return False
-
-def restart_runtime(runtime_id: str) -> bool:
-    try:
-        client = docker_from_env()
-        client.api.restart(runtime_id)
-        return True
-    except Exception:
-        return False
-
-def remove_image(image_tag: str) -> bool:
-    try:
-        client = docker_from_env()
-        client.images.remove(image=image_tag, force=True)
-        return True
-    except Exception:
-        return False
-
-def remove_workspace(workspace: str):
-    try:
-        shutil.rmtree(workspace, ignore_errors=True)
-    except Exception:
-        pass
-
-def get_runtime_logs(runtime_id: str, tail: int = 200) -> Optional[str]:
-    try:
-        client = docker_from_env()
-        logs = client.api.logs(runtime_id, tail=tail, stdout=True, stderr=True)
-        if isinstance(logs, (bytes, bytearray)):
-            try:
-                return logs.decode("utf-8", errors="replace")
-            except Exception:
-                return logs.decode("latin1", errors="replace")
-        return str(logs)
-    except Exception:
-        return None
