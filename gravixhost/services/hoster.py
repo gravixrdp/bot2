@@ -697,7 +697,7 @@ def write_runner_and_dockerfile(workspace: str, entry: Optional[str] = None, req
         "    except Exception:\n"
         "        import traceback\n"
         "        traceback.print_exc()\n"
-        "        sys.exit(1)\n"
+        "        sys.exit(1)\\n\"\n    )\n    with open(runner_py, "w", encoding="utf-8", newline="\\n") as f:\n        f.write(runner_code)\n\n    dockerfile = os.path.join(workspace, "Dockerfile")\ns.exit(1)\n"
     ) as f:
         f.write(runner_code)
 
