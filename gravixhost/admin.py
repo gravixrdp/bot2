@@ -79,11 +79,22 @@ async def admin_users_msg(message: Message):
     if not is_admin(message.from_user.id):
         return
     db = _read_db()
-    users = db["users"].values()
+    users = list(db["users"].values())
     text = [bold("👥 Users")]
     from datetime import datetime
     now = datetime.utcnow()
+    
+    # Enrich user profiles with fresh data from Telegram
+    enriched_users = []
     for u in users:
+        try:
+            enriched = await _enrich_user_profile(message.bot, u)
+            enriched_users.append(enriched)
+        except Exception:
+            # If enrichment fails, use original data
+            enriched_users.append(u)
+    
+    for u in enriched_users:
         apps_count = len(get_user_bots(u["id"]))
         display_name = _format_user_display(u)
         referrals = int((u.get("referral_count") or 0))
@@ -121,15 +132,24 @@ def _format_user_display(u: dict) -> str:
     Combine username and name for display:
     - If username exists, include as @username
     - If name exists, include after username
+    - Format: @username Name or Name (if no username) or Unknown
     """
-    uname = u.get("username") or ""
-    name = u.get("name") or ""
+    uname = (u.get("username") or "").strip()
+    name = (u.get("name") or "").strip()
     parts = []
     if uname:
         parts.append(f"@{uname}")
     if name:
-        parts.append(name)
-    return " ".join(parts).strip() or "Unknown"
+        parts.append(f"({name})")
+    result = " ".join(parts).strip()
+    if not result:
+        # Fallback: try to get from first_name/last_name if available
+        first_name = u.get("first_name") or ""
+        last_name = u.get("last_name") or ""
+        full_name = (first_name + " " + last_name).strip()
+        if full_name:
+            return full_name
+    return result or f"User {u.get('id', 'Unknown')}"
 
 
 @router.message(F.text == "💎 Premium")
@@ -216,21 +236,29 @@ async def admin_reply(message: Message):
 async def admin_apps_msg(message: Message):
     if not is_admin(message.from_user.id):
         return
-    text = [bold("📦 Apps — Hosted by Users")]
     db = _read_db()
     bots = list(db["bots"].values())
+    
+    # Show app count
+    total_apps = len(bots)
+    text = [bold(f"📦 Apps — Total: {total_apps}")]
+    
+    if not bots:
+        await message.answer(bold("No bots yet."), reply_markup=admin_menu_apps(), parse_mode=ParseMode.HTML)
+        return
 
-    # Group bots by owner
+    # Group bots by owner for display
     owners = {}
     for b in bots:
         owners.setdefault(b["owner_id"], []).append(b)
 
-    if not owners:
-        await message.answer(bold("No bots yet."), reply_markup=admin_menu_apps(), parse_mode=ParseMode.HTML)
-        return
-
     for owner_id, owner_bots in owners.items():
         u = get_user(int(owner_id))
+        # Try to enrich profile if missing name/username
+        try:
+            u = await _enrich_user_profile(message.bot, u)
+        except Exception:
+            pass
         owner_display = _format_user_display(u)
         text.append(f"\n{bold(owner_display)} ({code(str(owner_id))})")
         for b in owner_bots:
@@ -240,15 +268,14 @@ async def admin_apps_msg(message: Message):
 
     await message.answer("\n".join(text), reply_markup=admin_menu_apps(), parse_mode=ParseMode.HTML)
 
-    # Quick action buttons for easy control
-    from .keyboards import bots_action_list
+    # Show combined inline keyboard with all actions for all bots
+    from .keyboards import bots_combined_actions
     if bots:
-        await message.answer(bold("🛑 Stop a Bot") + "\nTap to stop:", reply_markup=bots_action_list(bots, "Stop", "admin_stop"), parse_mode=ParseMode.HTML)
-        await message.answer(bold("♻️ Restart a Bot") + "\nTap to restart:", reply_markup=bots_action_list(bots, "Restart", "admin_restart"), parse_mode=ParseMode.HTML)
-        await message.answer(bold("🗑️ Remove a Bot") + "\nTap to remove:", reply_markup=bots_action_list(bots, "Remove", "admin_remove"), parse_mode=ParseMode.HTML)
-        await message.answer(bold("📜 Bot Logs") + "\nTap to view:", reply_markup=bots_action_list(bots, "Logs", "admin_logs"), parse_mode=ParseMode.HTML)
-    else:
-        await message.answer(bold("No bots yet."), reply_markup=admin_menu_apps(), parse_mode=ParseMode.HTML)
+        await message.answer(
+            bold("⚡ Quick Actions") + "\nSelect an action for any bot:",
+            reply_markup=bots_combined_actions(bots),
+            parse_mode=ParseMode.HTML
+        )
 
     
 
@@ -738,19 +765,22 @@ async def admin_broadcast_choose(cb: CallbackQuery, state: FSMContext):
 async def admin_apps(cb: CallbackQuery):
     if not is_admin(cb.from_user.id):
         return
-    text = [bold("📦 Apps — Hosted by Users")]
     db = _read_db()
     bots = list(db["bots"].values())
+    
+    # Show app count
+    total_apps = len(bots)
+    text = [bold(f"📦 Apps — Total: {total_apps}")]
+
+    if not bots:
+        await cb.message.answer(bold("No bots yet."), reply_markup=admin_menu_apps(), parse_mode=ParseMode.HTML)
+        await cb.answer()
+        return
 
     # Group bots by owner
     owners = {}
     for b in bots:
         owners.setdefault(b["owner_id"], []).append(b)
-
-    if not owners:
-        await cb.message.answer(bold("No bots yet."), reply_markup=admin_fixed_bar(), parse_mode=ParseMode.HTML)
-        await cb.answer()
-        return
 
     for owner_id, owner_bots in owners.items():
         u = get_user(int(owner_id))
@@ -761,17 +791,16 @@ async def admin_apps(cb: CallbackQuery):
                 f"• {bold(b.get('name') or 'Unknown')} — ID {code(b['id'])} — Status: {bold(b['status'])}"
             )
 
-    await cb.message.answer("\n".join(text), reply_markup=admin_fixed_bar(), parse_mode=ParseMode.HTML)
+    await cb.message.answer("\n".join(text), reply_markup=admin_menu_apps(), parse_mode=ParseMode.HTML)
 
-    # Inline quick action lists
-    from .keyboards import bots_action_list
+    # Show combined inline keyboard with all actions for all bots
+    from .keyboards import bots_combined_actions
     if bots:
-        await cb.message.answer(bold("🛑 Stop a Bot") + "\nTap to stop:", reply_markup=bots_action_list(bots, "Stop", "admin_stop"), parse_mode=ParseMode.HTML)
-        await cb.message.answer(bold("♻️ Restart a Bot") + "\nTap to restart:", reply_markup=bots_action_list(bots, "Restart", "admin_restart"), parse_mode=ParseMode.HTML)
-        await cb.message.answer(bold("🗑️ Remove a Bot") + "\nTap to remove:", reply_markup=bots_action_list(bots, "Remove", "admin_remove"), parse_mode=ParseMode.HTML)
-        await cb.message.answer(bold("📜 Bot Logs") + "\nTap to view:", reply_markup=bots_action_list(bots, "Logs", "admin_logs"), parse_mode=ParseMode.HTML)
-    else:
-        await cb.message.answer(bold("No bots yet."), reply_markup=admin_fixed_bar(), parse_mode=ParseMode.HTML)
+        await cb.message.answer(
+            bold("⚡ Quick Actions") + "\nSelect an action for any bot:",
+            reply_markup=bots_combined_actions(bots),
+            parse_mode=ParseMode.HTML
+        )
     await cb.answer()
 
 
@@ -784,14 +813,14 @@ async def admin_cb_stop(cb: CallbackQuery):
     from .services.hoster import stop_runtime
     b = get_bot(bot_id)
     if not b:
-        await cb.message.answer("Bot not found.", reply_markup=admin_fixed_bar(), parse_mode=ParseMode.HTML)
+        await cb.message.answer("Bot not found.", reply_markup=admin_menu_apps(), parse_mode=ParseMode.HTML)
         await cb.answer()
         return
     rid = b.get("runtime_id")
     if rid:
         stop_runtime(rid)
     mark_stopped(bot_id)
-    await cb.message.answer(f"🛑 Stopped {code(bot_id)}", reply_markup=admin_fixed_bar(), parse_mode=ParseMode.HTML)
+    await cb.message.answer(f"🛑 Stopped {code(bot_id)}", reply_markup=admin_menu_apps(), parse_mode=ParseMode.HTML)
     await cb.answer()
 
 
@@ -804,14 +833,14 @@ async def admin_cb_restart(cb: CallbackQuery):
     from .services.hoster import restart_runtime
     b = get_bot(bot_id)
     if not b:
-        await cb.message.answer("Bot not found.", reply_markup=admin_fixed_bar(), parse_mode=ParseMode.HTML)
+        await cb.message.answer("Bot not found.", reply_markup=admin_menu_apps(), parse_mode=ParseMode.HTML)
         await cb.answer()
         return
     rid = b.get("runtime_id")
     if rid and restart_runtime(rid):
-        await cb.message.answer(f"♻️ Restarted {code(bot_id)}", reply_markup=admin_fixed_bar(), parse_mode=ParseMode.HTML)
+        await cb.message.answer(f"♻️ Restarted {code(bot_id)}", reply_markup=admin_menu_apps(), parse_mode=ParseMode.HTML)
     else:
-        await cb.message.answer("Failed to restart.", reply_markup=admin_fixed_bar(), parse_mode=ParseMode.HTML)
+        await cb.message.answer("Failed to restart.", reply_markup=admin_menu_apps(), parse_mode=ParseMode.HTML)
     await cb.answer()
 
 
@@ -824,7 +853,7 @@ async def admin_cb_remove(cb: CallbackQuery):
     from .services.hoster import stop_runtime, remove_workspace, remove_image
     b = get_bot(bot_id)
     if not b:
-        await cb.message.answer("Bot not found.", reply_markup=admin_fixed_bar(), parse_mode=ParseMode.HTML)
+        await cb.message.answer("Bot not found.", reply_markup=admin_menu_apps(), parse_mode=ParseMode.HTML)
         await cb.answer()
         return
     rid = b.get("runtime_id")
@@ -835,7 +864,69 @@ async def admin_cb_remove(cb: CallbackQuery):
     if b.get("path"):
         remove_workspace(b["path"])
     delete_bot(bot_id)
-    await cb.message.answer(f"🗑️ Removed {code(bot_id)}", reply_markup=admin_fixed_bar(), parse_mode=ParseMode.HTML)
+    await cb.message.answer(f"🗑️ Removed {code(bot_id)}", reply_markup=admin_menu_apps(), parse_mode=ParseMode.HTML)
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("admin_logs:"))
+async def admin_cb_logs(cb: CallbackQuery):
+    """
+    Show logs for a bot - just display logs, no more buttons.
+    """
+    if not is_admin(cb.from_user.id):
+        return
+    bot_id = cb.data.split(":", 1)[1]
+    from .storage import get_bot
+    from .services.hoster import get_runtime_logs
+
+    db = _read_db()
+    logs = []
+    for entry in reversed(db.get("logs", [])):
+        ev = entry.get("event", "")
+        if bot_id in ev:
+            logs.append(f"• {entry.get('time','')} — {ev}")
+        if len(logs) >= 100:
+            break
+
+    # Try to fetch container logs too
+    b = get_bot(bot_id)
+    runtime_text = ""
+    if b and b.get("runtime_id"):
+        rid = b["runtime_id"]
+        docker_logs = await asyncio.to_thread(get_runtime_logs, rid, 200)
+        if docker_logs:
+            runtime_text = docker_logs.strip()
+
+    if not logs and not runtime_text:
+        await cb.message.answer(bold("No logs for this bot."), parse_mode=ParseMode.HTML)
+        await cb.answer()
+        return
+
+    # Chunked send of system logs
+    if logs:
+        header = bold("🧾 Bot Logs (system)")
+        chunk = []
+        current_len = 0
+        for line in logs:
+            if current_len + len(line) + 1 > 3500:
+                await cb.message.answer(header + "\n" + pre("\n".join(chunk)), parse_mode=ParseMode.HTML)
+                chunk = []
+                current_len = 0
+            chunk.append(line)
+            current_len += len(line) + 1
+        if chunk:
+            await cb.message.answer(header + " (cont.)\n" + pre("\n".join(chunk)), parse_mode=ParseMode.HTML)
+
+    # Send docker logs
+    if runtime_text:
+        await cb.message.answer(bold("🧾 Bot Logs (container)") + "\n" + pre(runtime_text[-3500:]), parse_mode=ParseMode.HTML)
+    
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("admin_bot_info:"))
+async def admin_cb_bot_info(cb: CallbackQuery):
+    # Placeholder for bot info - just answer the callback (no action needed, it's just a label)
     await cb.answer()
 
 

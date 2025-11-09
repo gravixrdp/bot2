@@ -2,51 +2,227 @@
   "users": {
     "6649712542": {
       "id": 6649712542,
-      "name": "",
+      "name": "\ud835\ude3d\ud835\ude64\ud835\ude69\ud835\ude5b\ud835\ude56\ud835\ude69\ud835\ude5d\ud835\ude5a\ud835\ude67",
       "is_premium": true,
-      "premium_expiry": "2025-10-24T20:42:34.627506"
+      "premium_expiry": "2025-11-15T09:02:54.372998",
+      "username": "",
+      "referral_count": 0,
+      "referred_by": null,
+      "created_at": "2025-11-05T08:06:50.844834"
     },
     "5610858626": {
       "id": 5610858626,
-      "name": "",
+      "name": "\ud835\udc03\ud835\udc2b\ud835\udc1a\ud835\udc2f\ud835\udc28\ud835\udc27 \ud83c\uddee\ud83c\uddf3",
       "is_premium": true,
-      "premium_expiry": "2026-10-14T20:38:50.324817"
+      "premium_expiry": "2026-10-14T20:38:50.324817",
+      "username": "Dravonn",
+      "referral_count": 0,
+      "referred_by": null,
+      "created_at": "2025-11-05T08:06:50.846142"
+    },
+    "8186973947": {
+      "id": 8186973947,
+      "name": "\u27c6 \ud835\udc09\ud835\udc04\ud835\udc17 \u27c5",
+      "username": "ApkaChotaBhaiJex",
+      "is_premium": true,
+      "premium_expiry": "2025-11-17T09:27:28.063455",
+      "referral_count": 0,
+      "referred_by": null,
+      "created_at": "2025-11-05T09:16:45.349081"
+    },
+    "1025575230": {
+      "id": 1025575230,
+      "name": "Faisal Shaikh",
+      "username": "proman786",
+      "is_premium": false,
+      "premium_expiry": null,
+      "referral_count": 0,
+      "referred_by": null,
+      "created_at": "2025-11-05T12:08:54.174471"
+    },
+    "7857898495": {
+      "id": 7857898495,
+      "name": "\ud835\udcd0\ud835\udcf7\ud835\udcf2\ud835\udcf6\ud835\udcee \ud835\udce4\ud835\udcf7\ud835\udcf2\ud835\udcff\ud835\udcee\ud835\udcfb\ud835\udcfc\ud835\udcee",
+      "username": "Animeuniverse369",
+      "is_premium": false,
+      "premium_expiry": "2025-11-08T02:05:36.303587",
+      "referral_count": 1,
+      "referred_by": null,
+      "created_at": "2025-11-05T12:13:05.010001"
+    },
+    "6937053681": {
+      "id": 6937053681,
+      "name": "\u534d \u092e\u0939\u093e\u0915\u093e\u0932 \u534d",
+      "username": "MAHAKAL_Rx",
+      "is_premium": false,
+      "premium_expiry": null,
+      "referral_count": 0,
+      "referred_by": null,
+      "created_at": "2025-11-05T12:40:48.238005"
+    },
+    "7702917252": {
+      "id": 7702917252,
+      "name": "\ud83c\udf77\uaa97\uaa96\u0c15\uaadd\ud83c\udf77",
+      "username": "Codexx112",
+      "is_premium": false,
+      "premium_expiry": null,
+      "referral_count": 0,
+      "referred_by": null,
+      "created_at": "2025-11-06T05:08:09.774608"
+    },
+    "7415661180": {
+      "id": 7415661180,
+      "name": "Ultra Anime",
+      "username": "Ultraanime786",
+      "is_premium": true,
+      "premium_expiry": "2025-11-14T12:37:12.433229",
+      "referral_count": 0,
+      "referred_by": null,
+      "created_at": "2025-11-06T05:40:15.899266"
+    },
+    "8178486120": {
+      "id": 8178486120,
+      "name": "\u15f4\u15ea\u15ef\u15e9\u1587\u15ea \u15f4\u14aa\u1587I\u1455",
+      "username": "edwardelric_3355",
+      "is_premium": false,
+      "premium_expiry": null,
+      "referral_count": 0,
+      "referred_by": null,
+      "created_at": "2025-11-06T06:12:26.470881"
+    },
+    "7658725545": {
+      "id": 7658725545,
+      "name": "GACHIAKUTA",
+      "username": "Yutaokats",
+      "is_premium": false,
+      "premium_expiry": null,
+      "referral_count": 0,
+      "referred_by": "7857898495",
+      "created_at": "2025-11-06T10:55:53.398264"
+    },
+    "1891312253": {
+      "id": 1891312253,
+      "name": "CP THARUN",
+      "username": "",
+      "is_premium": true,
+      "premium_expiry": "2025-11-16T15:52:20.170449",
+      "referral_count": 0,
+      "referred_by": null,
+      "created_at": "2025-11-06T13:20:58.829554"
     }
   },
   "bots": {
-    "b5610858626-1760474110": {
-      "id": "b5610858626-1760474110",
-      "owner_id": 5610858626,
-      "name": "sample_bold_bot",
+    "b7857898495-1762428860": {
+      "id": "b7857898495-1762428860",
+      "owner_id": 7857898495,
+      "name": "Keippo",
       "token": "",
-      "path": "/home/ubuntu/bot1/data/uploads/5610858626/b5610858626-1760474110",
+      "path": "/home/ubuntu/bot2/data/uploads/7857898495/b7857898495-1762428860",
       "status": "stopped",
       "runtime_id": null,
-      "created_at": "2025-10-14T20:35:10.126860",
-      "started_at": "2025-10-14T20:35:26.479136",
+      "created_at": "2025-11-06T11:34:20.968682",
+      "started_at": "2025-11-07T12:39:47.709618",
+      "plan": "premium"
+    },
+    "b8186973947-1762510207": {
+      "id": "b8186973947-1762510207",
+      "owner_id": 8186973947,
+      "name": "bot",
+      "token": "",
+      "path": "/home/ubuntu/bot2/data/uploads/8186973947/b8186973947-1762510207",
+      "status": "stopped",
+      "runtime_id": null,
+      "created_at": "2025-11-07T10:10:07.354127",
+      "started_at": "2025-11-07T12:39:55.930598",
       "plan": "free"
     },
-    "b5610858626-1760474458": {
-      "id": "b5610858626-1760474458",
-      "owner_id": 5610858626,
-      "name": "file-ljc",
+    "b7415661180-1762521868": {
+      "id": "b7415661180-1762521868",
+      "owner_id": 7415661180,
+      "name": "bot",
       "token": "",
-      "path": "/home/ubuntu/bot1/data/uploads/5610858626/b5610858626-1760474458",
+      "path": "/home/ubuntu/bot2/data/uploads/7415661180/b7415661180-1762521868",
+      "status": "stopped",
+      "runtime_id": null,
+      "created_at": "2025-11-07T13:24:28.400647",
+      "started_at": null,
+      "plan": "free"
+    },
+    "b7415661180-1762521909": {
+      "id": "b7415661180-1762521909",
+      "owner_id": 7415661180,
+      "name": "Compressor26Bot",
+      "token": "",
+      "path": "/home/ubuntu/bot2/data/uploads/7415661180/b7415661180-1762521909",
       "status": "running",
-      "runtime_id": "aaaba208e46d3048a8cf302923eeac1463ced6dc14340104b3ee461f61a67d29",
-      "created_at": "2025-10-14T20:40:58.641729",
-      "started_at": "2025-10-14T20:41:34.169169",
+      "runtime_id": "d6e3affbad9ea953edf8fe8bb5dac6e6b2f8efcbe4a98fc943e62f0e24ce9588",
+      "created_at": "2025-11-07T13:25:09.352286",
+      "started_at": "2025-11-07T13:25:26.239414",
+      "plan": "premium"
+    },
+    "b5610858626-1762525673": {
+      "id": "b5610858626-1762525673",
+      "owner_id": 5610858626,
+      "name": "Userr",
+      "token": "",
+      "path": "/home/ubuntu/bot2/data/uploads/5610858626/b5610858626-1762525673",
+      "status": "stopped",
+      "runtime_id": null,
+      "created_at": "2025-11-07T14:27:53.380000",
+      "started_at": null,
+      "plan": "free"
+    },
+    "b5610858626-1762527416": {
+      "id": "b5610858626-1762527416",
+      "owner_id": 5610858626,
+      "name": "sacvbn",
+      "token": "",
+      "path": "/home/ubuntu/bot2/data/uploads/5610858626/b5610858626-1762527416",
+      "status": "running",
+      "runtime_id": "41baecfb86da8ef26df5b5c9326759ff5b7cc95b88561ad01289ffdd8269935a",
+      "created_at": "2025-11-07T14:56:56.791791",
+      "started_at": "2025-11-07T14:57:08.283249",
       "plan": "premium"
     }
   },
   "logs": [
     {
-      "time": "2025-10-14T20:42:13.964335",
+      "time": "2025-11-07T14:55:37.946051",
       "event": "Admin 5610858626 cleared admin logs",
+      "scope": "admin"
+    },
+    {
+      "time": "2025-11-07T14:59:36.335000",
+      "event": "Broadcast by 5610858626 audience=both sent=11 failed=0",
       "scope": "admin"
     }
   ],
-  "messages": [],
+  "messages": [
+    {
+      "user_id": "8186973947",
+      "text": "There is a problem here bot while deploying everything is correct but still some error comes like token missing etc please solve",
+      "time": "2025-11-06T06:50:24.699846",
+      "from_admin": false
+    },
+    {
+      "user_id": "7857898495",
+      "text": "Hey Admin \nHow Can I Install Build Dependencies Like Ffmpeg in this tell?",
+      "time": "2025-11-06T11:12:10.548116",
+      "from_admin": false
+    },
+    {
+      "user_id": "7415661180",
+      "text": "Compressor26Bot",
+      "time": "2025-11-07T13:24:40.471687",
+      "from_admin": false
+    },
+    {
+      "user_id": "5610858626",
+      "text": "\ud83d\udee1\ufe0f Admin Panel",
+      "time": "2025-11-07T14:58:12.430894",
+      "from_admin": false
+    }
+  ],
   "settings": {
     "free_duration_minutes": 60,
     "restart_policy": "on",

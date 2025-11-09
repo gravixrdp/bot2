@@ -169,6 +169,29 @@ def bots_action_list(bots, action_text: str, prefix: str) -> InlineKeyboardMarku
         rows.append([InlineKeyboardButton(text=f"{action_text}: {name} — {bid}", callback_data=f"{prefix}:{bid}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
+
+def bots_combined_actions(bots) -> InlineKeyboardMarkup:
+    """
+    Build a combined inline keyboard with all actions (Stop, Remove, Logs, Restart) for each bot.
+    Each bot gets 2 rows: first row shows bot name/ID as label, second row has 4 action buttons.
+    """
+    rows = []
+    for b in bots:
+        name = b.get("name") or "MyBot"
+        bid = b.get("id")
+        # Shorten name if too long for display
+        display_name = name[:20] if len(name) > 20 else name
+        # First row: Bot name/ID as label
+        rows.append([InlineKeyboardButton(text=f"📦 {display_name} ({bid})", callback_data=f"admin_bot_info:{bid}")])
+        # Second row: Action buttons
+        rows.append([
+            InlineKeyboardButton(text="🛑 Stop", callback_data=f"admin_stop:{bid}"),
+            InlineKeyboardButton(text="🗑️ Remove", callback_data=f"admin_remove:{bid}"),
+            InlineKeyboardButton(text="📜 Logs", callback_data=f"admin_logs:{bid}"),
+            InlineKeyboardButton(text="♻️ Restart", callback_data=f"admin_restart:{bid}"),
+        ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
 def referral_share_kb(ref_url: str, share_text: str = "") -> InlineKeyboardMarkup:
     """
     Inline keyboard for referral:

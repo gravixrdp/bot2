@@ -15,7 +15,7 @@ from aiogram.fsm.context import FSMContext
 
 from .config import MASTER_BOT_TOKEN, APP_NAME, ADMIN_TELEGRAM_ID
 from .keyboards import main_menu, support_url_kb, user_manage_menu, bots_action_list
-from .utils import bold, code, human_dt, is_valid_token, italic, underline, strike, pre
+from .utils import bold, code, human_dt, is_valid_token, italic, underline, strike, pre, escape
 from .storage import (
     get_user,
     update_user,
@@ -707,8 +707,12 @@ async def on_contact_admin(message: Message, state: FSMContext):
 async def _start_host_flow(message: Message, state: FSMContext):
     await state.set_state(HostStates.waiting_file)
     await state.update_data(pending=PendingHost().__dict__)
+    msg_text = bold("🚀 Let's get your bot online!") + "\n"
+    msg_text += "• Upload a file: " + code("bot.py") + " or .zip\n"
+    msg_text += "• Or send GitHub repo URL: " + code("https://github.com/user/repo") + "\n"
+    msg_text += "• Or send repo short: " + code("user/repo")
     await message.answer(
-        f"{bold('🚀 Let’s get your bot online!')}\nPlease upload a file (like " + code("bot.py") + " or a .zip containing your bot code).",
+        msg_text,
         reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
         parse_mode=ParseMode.HTML,
     )
@@ -742,8 +746,9 @@ async def handle_upload(message: Message, state: FSMContext):
             code_text = data_bytes.decode("utf-8", errors="ignore")
         except Exception:
             code_text = ""
-        from .services.hoster import analyze_code, detect_requirements
-        framework, token_var, reqs_guess = analyze_code(code_text)
+        from .services.hoster import analyze_code, detect_requirements, extract_token_from_code
+        # Advanced analysis: returns (framework, token_var, reqs, extracted_token)
+        framework, token_var, reqs_guess, extracted_token = analyze_code(code_text)
 
         # Auto-detect requirements from the uploaded file/workspace; fall back to framework guess
         try:
@@ -751,6 +756,9 @@ async def handle_upload(message: Message, state: FSMContext):
         except Exception:
             autodetected_reqs = []
         final_reqs = autodetected_reqs or (reqs_guess or [])
+        
+        # Smart token handling: if token found in code, use it automatically
+        auto_token = extracted_token
 
         await state.update_data(
             pending=PendingHost(
@@ -764,19 +772,85 @@ async def handle_upload(message: Message, state: FSMContext):
                 "framework": framework,
                 "token_var": token_var,
                 "reqs": final_reqs,
+                "auto_token": auto_token,  # Store auto-detected token
             },
         )
-        # Inform the user about detected requirements (short preview) and ask to confirm/add
-        reqs_preview = "\n".join(final_reqs[:10]) if final_reqs else "none"
+        
+        # Smart token detection message
+        token_info = ""
+        if auto_token:
+            # Token found in code - use it automatically
+            token_info = f"\n\n🔑 Token detected in your code! Will use it automatically."
+            # Store token in pipeline
+            current_data = await state.get_data()
+            current_pipeline = dict(current_data.get("code_pipeline", {}))
+            current_pipeline["token"] = auto_token
+            current_pipeline["auto_token"] = auto_token
+            await state.update_data(code_pipeline=current_pipeline)
+        else:
+            token_info = f"\n\n⚠️ No token found in code. You'll need to provide it later."
+        
+        # Smart automatic flow: if token and requirements detected, skip prompts
+        if auto_token and final_reqs:
+            # Everything detected - go straight to name, then deploy
+            await message.answer(
+                f"✅ Smart Analysis Complete!\n\n"
+                f"🔑 Token: {bold('Auto-detected')}\n"
+                f"📦 Requirements: {bold(f'{len(final_reqs)} packages detected')}\n"
+                f"🔧 Framework: {bold(framework)}\n\n"
+                f"📝 Please send a name for your bot (e.g., MyShopBot):",
+                reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
+                parse_mode=ParseMode.HTML,
+            )
+            await state.set_state(HostStates.waiting_name)
+            return
+        
+        # If only token detected, still ask for requirements confirmation
+        if auto_token:
+            reqs_preview = "\n".join(final_reqs[:10]) if final_reqs else "none"
+            instruction = (
+                "🔑 Token: Auto-detected!\n\n"
+                "📦 Detected requirements:\n"
+                + (pre(reqs_preview) if final_reqs else pre("none")) +
+                "\n\nIf you need to add or override, reply in this format:\n"
+                + pre("requirements:\npython-telegram-bot==13.15\nnumpy\nrequests>=2.31")
+                + "\nSend " + code("skip") + " or " + code("requirements: none") + " to use detected requirements."
+            )
+            await message.answer(
+                f"✅ Analyzed your code.\n\nFramework: {bold(framework)}\nToken var: {code(token_var)}\n\n{instruction}",
+                reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
+                parse_mode=ParseMode.HTML,
+            )
+            await state.set_state(HostStates.waiting_requirements)
+            return
+        
+        # If only requirements detected, ask for token
+        if final_reqs:
+            reqs_preview = "\n".join(final_reqs[:10]) if final_reqs else "none"
+            instruction = (
+                "📦 Detected requirements:\n"
+                + (pre(reqs_preview) if final_reqs else pre("none")) +
+                "\n\nIf you need to add or override, reply in this format:\n"
+                + pre("requirements:\npython-telegram-bot==13.15\nnumpy\nrequests>=2.31")
+                + "\nSend " + code("skip") + " to use detected requirements."
+            )
+            await message.answer(
+                f"✅ Analyzed your code.\n\nFramework: {bold(framework)}\nToken var: {code(token_var)}{token_info}\n\n{instruction}",
+                reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
+                parse_mode=ParseMode.HTML,
+            )
+            await state.set_state(HostStates.waiting_requirements)
+            return
+        
+        # Nothing detected - ask for requirements first
         instruction = (
-            "📦 Detected requirements (with versions if needed):\n"
-            + (pre(reqs_preview) if final_reqs else pre("none")) +
-            "\n\nIf you need to add or override, reply in this format:\n"
+            "📦 No requirements detected.\n\n"
+            "If you need packages, reply in this format:\n"
             + pre("requirements:\npython-telegram-bot==13.15\nnumpy\nrequests>=2.31")
-            + "\nSend " + code("requirements: none") + " or " + code("skip") + " if everything is OK."
+            + "\nSend " + code("skip") + " if no additional packages needed."
         )
         await message.answer(
-            f"✅ Analyzed your code.\n\nFramework: {framework}\nToken var: {token_var}\n\n{instruction}",
+            f"✅ Analyzed your code.\n\nFramework: {bold(framework)}\nToken var: {code(token_var)}{token_info}\n\n{instruction}",
             reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
             parse_mode=ParseMode.HTML,
         )
@@ -786,14 +860,29 @@ async def handle_upload(message: Message, state: FSMContext):
     # Detect entry file for archives/zip or multi-file
     entry_name = _detect_entry(workspace, filename)
 
-    # Auto-detect requirements for archives as well and keep in state for later
+    # Auto-detect requirements and token for archives as well
     autodetected_reqs = []
+    extracted_token = None
     try:
-        from .services.hoster import detect_requirements
+        from .services.hoster import detect_requirements, extract_token_from_code
         autodetected_reqs = detect_requirements(workspace)
+        # Try to extract token from entry file
+        entry_path = os.path.join(workspace, entry_name)
+        if os.path.exists(entry_path):
+            try:
+                with open(entry_path, "r", encoding="utf-8", errors="ignore") as f:
+                    entry_code = f.read()
+                    extracted_token = extract_token_from_code(entry_code)
+            except Exception:
+                pass
     except Exception:
         autodetected_reqs = []
 
+    # Smart token info for archives
+    token_info = ""
+    if extracted_token:
+        token_info = "\n\n🔑 Token detected in your code! Will use it automatically."
+    
     await state.update_data(
         pending=PendingHost(
             workspace=workspace,
@@ -801,24 +890,133 @@ async def handle_upload(message: Message, state: FSMContext):
             bot_record_id=bot_rec["id"],
             bot_name=bot_rec["name"]
         ).__dict__,
-        code_pipeline={"reqs": autodetected_reqs} if autodetected_reqs else {}
+        code_pipeline={
+            "reqs": autodetected_reqs if autodetected_reqs else [],
+            "auto_token": extracted_token,
+            "token": extracted_token if extracted_token else None,
+        }
     )
 
-    # Ask for app name first (archive/multi-file path)
-    reqs_preview = "\n".join(autodetected_reqs[:10]) if autodetected_reqs else "none"
-    extra_note = f"\nDetected requirements:\n{pre(reqs_preview)}" if autodetected_reqs else "\nNo requirements.txt found — we'll auto-detect libraries from your code."
-    await message.answer(
-        "📝 Please send a name for your app (e.g., MyShopBot)." + extra_note,
-        reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
-        parse_mode=ParseMode.HTML,
-    )
-    await state.set_state(HostStates.waiting_name)
+    # Smart automatic flow for archives: if token detected, go straight to name
+    if extracted_token:
+        reqs_preview = "\n".join(autodetected_reqs[:10]) if autodetected_reqs else "none"
+        extra_note = f"\n\n📦 Detected requirements:\n{pre(reqs_preview)}" if autodetected_reqs else "\n\n📦 No requirements.txt found — we'll auto-detect libraries from your code."
+        await message.answer(
+            f"✅ Smart Analysis Complete!\n\n🔑 Token: {bold('Auto-detected')}\n📦 Requirements: {bold(f'{len(autodetected_reqs)} packages detected' if autodetected_reqs else 'Will auto-detect')}{extra_note}\n\n📝 Please send a name for your app (e.g., MyShopBot):",
+            reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
+            parse_mode=ParseMode.HTML,
+        )
+        await state.set_state(HostStates.waiting_name)
+    else:
+        # Ask for app name first (archive/multi-file path)
+        reqs_preview = "\n".join(autodetected_reqs[:10]) if autodetected_reqs else "none"
+        extra_note = f"\nDetected requirements:\n{pre(reqs_preview)}" if autodetected_reqs else "\nNo requirements.txt found — we'll auto-detect libraries from your code."
+        await message.answer(
+            f"📝 Please send a name for your app (e.g., MyShopBot).{token_info}{extra_note}",
+            reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
+            parse_mode=ParseMode.HTML,
+        )
+        await state.set_state(HostStates.waiting_name)
 
 
 @router.message(HostStates.waiting_file)
-async def upload_error(message: Message):
+async def handle_github_or_error(message: Message, state: FSMContext):
+    text = (message.text or "").strip()
+    
+    # Check if it's a GitHub URL
+    github_patterns = [
+        r"(?:https?://)?(?:www\.)?github\.com/[\w\-\.]+/[\w\-\.]+",
+        r"^[\w\-\.]+/[\w\-\.]+$",  # user/repo format
+    ]
+    
+    is_github = False
+    repo_url = None
+    for pattern in github_patterns:
+        import re
+        match = re.search(pattern, text)
+        if match:
+            is_github = True
+            repo_url = match.group(0) if match.groups() else match.group(0)
+            break
+    
+    if is_github and repo_url:
+        # Handle GitHub repo
+        user_id = message.from_user.id
+        bot_rec = add_bot(user_id, name=os.path.basename(repo_url.rstrip("/")), token="", path="")
+        
+        from .services.hoster import clone_github_repo, detect_requirements, extract_token_from_code, detect_entry_file
+        workspace = clone_github_repo(user_id, bot_rec["id"], repo_url)
+        
+        if not workspace:
+            await message.answer(
+                f"{bold('❌ Failed to clone repository')}\n"
+                f"Please check:\n"
+                f"• Repository is public\n"
+                f"• URL is correct\n"
+                f"• Git is installed on server",
+                reply_markup=main_menu(get_user(user_id).get("is_premium")),
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        
+        update_bot(bot_rec["id"], path=workspace)
+        
+        # Auto-detect entry file, requirements, and token
+        entry_name = detect_entry_file(workspace)
+        autodetected_reqs = []
+        extracted_token = None
+        
+        try:
+            autodetected_reqs = detect_requirements(workspace)
+            entry_path = os.path.join(workspace, entry_name) if entry_name else None
+            if entry_path and os.path.exists(entry_path):
+                try:
+                    with open(entry_path, "r", encoding="utf-8", errors="ignore") as f:
+                        entry_code = f.read()
+                        extracted_token = extract_token_from_code(entry_code)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        
+        token_info = ""
+        if extracted_token:
+            token_info = "\n\n🔑 Token detected in your code! Will use it automatically."
+        
+        await state.update_data(
+            pending=PendingHost(
+                workspace=workspace,
+                entry_name=entry_name,
+                bot_record_id=bot_rec["id"],
+                bot_name=bot_rec["name"]
+            ).__dict__,
+            code_pipeline={
+                "reqs": autodetected_reqs if autodetected_reqs else [],
+                "auto_token": extracted_token,
+                "token": extracted_token if extracted_token else None,
+                "source": "github",
+            }
+        )
+        
+        reqs_preview = "\n".join(autodetected_reqs[:10]) if autodetected_reqs else "none"
+        extra_note = f"\n📦 Detected requirements:\n{pre(reqs_preview)}" if autodetected_reqs else "\n📦 Auto-detecting requirements from code..."
+        
+        await message.answer(
+            f"✅ Repository cloned successfully!\n\n"
+            f"📁 Entry file: {code(entry_name or 'auto-detect')}{token_info}{extra_note}\n\n"
+            f"📝 Please send a name for your bot (e.g., MyShopBot):",
+            reply_markup=main_menu(get_user(user_id).get("is_premium")),
+            parse_mode=ParseMode.HTML,
+        )
+        await state.set_state(HostStates.waiting_name)
+        return
+    
+    # Not a GitHub URL, show error
     await message.answer(
-        f"{bold('⚠️ File type not supported.')}\nPlease upload a .py file or .zip archive.",
+        f"{bold('⚠️ Invalid input.')}\n"
+        f"Please:\n"
+        f"• Upload a .py file or .zip archive\n"
+        f"• Or send GitHub repo URL: " + code("https://github.com/user/repo"),
         reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
         parse_mode=ParseMode.HTML,
     )
@@ -878,6 +1076,11 @@ async def handle_requirements(message: Message, state: FSMContext):
     cp["reqs"] = final
     await state.update_data(code_pipeline=cp)
 
+    # Check if token was auto-detected
+    data = await state.get_data()
+    cp = dict(data.get("code_pipeline") or {})
+    auto_token = cp.get("auto_token") or cp.get("token")
+    
     # If google-genai is required, ask for API key first
     if any(r.lower().startswith("google-genai") for r in final):
         await message.answer(
@@ -888,9 +1091,23 @@ async def handle_requirements(message: Message, state: FSMContext):
         await state.set_state(HostStates.waiting_google_key)
         return
 
-    # Next: ask for bot token
+    # Smart token handling: if auto-detected, skip token input and go to name
+    if auto_token:
+        # Token already found, proceed directly to name
+        cp["token"] = auto_token
+        await state.update_data(code_pipeline=cp)
+        # Ask for app name instead
+        await message.answer(
+            f"✅ Requirements saved!\n🔑 Token: Auto-detected from your code!\n\n📝 Please send a name for your bot (e.g., MyShopBot):",
+            reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
+            parse_mode=ParseMode.HTML,
+        )
+        await state.set_state(HostStates.waiting_name)
+        return
+
+    # Next: ask for bot token (only if not auto-detected)
     await message.answer(
-        "🔐 Please send your bot token (e.g. " + code("123456:ABC-DEF...") + ")",
+        "✅ Requirements saved!\n\n🔐 Please send your bot token (e.g. " + code("123456:ABC-DEF...") + ")",
         reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
         parse_mode=ParseMode.HTML,
     )
@@ -970,13 +1187,50 @@ async def handle_app_name(message: Message, state: FSMContext):
             await state.clear()
             return
 
-        await message.answer("🔄 Deploying... Please wait 2-5 minutes", parse_mode=ParseMode.HTML)
+        await message.answer("🔄 Deploying... Building container and installing dependencies. This may take 1-3 minutes.", parse_mode=ParseMode.HTML)
         from .services.hoster import build_and_run_from_code
-        ok, runtime_id, err = build_and_run_from_code(
-            message.from_user.id, name, code_text, reqs, framework, token_var, token, extra_env=extra_env
+        # Run build in background thread to avoid blocking
+        ok, runtime_id, err = await asyncio.to_thread(
+            build_and_run_from_code,
+            message.from_user.id, name, code_text, reqs, framework, token_var, token, extra_env or {}
         )
         if not ok:
-            await message.answer(f"❌ Failed!\n\n{err or 'Unknown error'}", parse_mode=ParseMode.HTML)
+            error_message = err or "Unknown error occurred"
+            # Check if error message already contains detailed information
+            if error_message.startswith("Runtime Error:") or error_message.startswith("Build Error:") or error_message.startswith("Docker API Error:") or error_message.startswith("Permission Error:") or error_message.startswith("Storage Error:") or error_message.startswith("Network Error:") or error_message.startswith("Entry File Error:") or error_message.startswith("Docker Unavailable:") or error_message.startswith("Build Timeout:") or error_message.startswith("Error ("):
+                # Error already formatted, use it directly
+                await message.answer(
+                    f"{bold('❌ Deployment Failed')}\n\n"
+                    f"{pre(escape(error_message))}\n\n"
+                    f"{bold('💡 Need help?')}\n"
+                    f"• Review the error details above\n"
+                    f"• Check your code for issues mentioned\n"
+                    f"• Try again after fixing the problems\n"
+                    f"• Contact support if issue persists",
+                    reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
+                    parse_mode=ParseMode.HTML,
+                )
+            else:
+                # Format error message with better structure
+                await message.answer(
+                    f"{bold('❌ Deployment Failed')}\n\n"
+                    f"{pre(escape(error_message))}\n\n"
+                    f"{bold('💡 What to do:')}\n"
+                    f"• Check the error message above\n"
+                    f"• Review your code for syntax errors\n"
+                    f"• Verify requirements.txt is correct\n"
+                    f"• Ensure your bot token is valid\n"
+                    f"• Try uploading again after fixing issues\n\n"
+                    f"If the problem persists, contact support.",
+                    reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
+                    parse_mode=ParseMode.HTML,
+                )
+            # Cleanup workspace on failure
+            if pending.workspace:
+                try:
+                    remove_workspace(pending.workspace)
+                except Exception:
+                    pass
             await state.clear()
             return
 
@@ -1071,61 +1325,96 @@ async def handle_token(message: Message, state: FSMContext):
         return
 
     # Build and deploy
-    await message.answer("🔧 Setting up your hosting environment...", reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")), parse_mode=ParseMode.HTML)
-    ok, runtime_id, err = build_and_run(message.from_user.id, pending.bot_record_id, token, pending.workspace, entry=pending.entry_name)
+    await message.answer("🔄 Deploying... Building container and installing dependencies. This may take 1-3 minutes.", reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")), parse_mode=ParseMode.HTML)
+    # Run build in background thread to avoid blocking
+    ok, runtime_id, err = await asyncio.to_thread(
+        build_and_run,
+        message.from_user.id, pending.bot_record_id, token, pending.workspace, pending.entry_name
+    )
     if not ok:
-        # Build user-friendly guidance, without exposing infrastructure details.
-        base_msg = ""
-        if err == "docker_unavailable":
-            base_msg = (
-                bold("⚠️ Hosting service not available") + "\n"
-                + "The hosting service is currently busy or unavailable. Please try again later."
-            )
-        elif err == "build_error":
-            base_msg = (
-                bold("⚠️ Build failed") + "\n"
-                + "Some dependencies or imports could not be resolved.\n"
-                + "• Check your requirements.txt (spelling and versions)\n"
-                +"• Ensure entry file runs locally: " + code(f"python {pending.entry_name or 'your_file.py'}")
-            )
-        elif err == "no_entry_py":
-            base_msg = (
-                bold("⚠️ Entry file not found") + "\n"
-                + "Please upload a .py file (e.g., bot.py/app.py/main.py) or a zip with your code."
-            )
-        elif isinstance(err, str) and err.startswith("runtime_error:"):
-            # Surface concise runtime error line from container logs to help users fix quickly
-            detail = err.split(":", 1)[1].strip()
-            base_msg = (
-                bold("⚠️ Runtime error") + "\n"
-                + (detail + "\n" if detail else "")
-                + "Try running locally: " + code(f"python {pending.entry_name or 'your_file.py'}")
+        error_message = err or "Unknown error occurred"
+        # Check if error message already contains detailed information
+        if error_message.startswith("Runtime Error:") or error_message.startswith("Build Error:") or error_message.startswith("Docker API Error:") or error_message.startswith("Permission Error:") or error_message.startswith("Storage Error:") or error_message.startswith("Network Error:") or error_message.startswith("Entry File Error:") or error_message.startswith("Docker Unavailable:") or error_message.startswith("Build Timeout:") or error_message.startswith("Error ("):
+            # Error already formatted, use it directly
+            await message.answer(
+                f"{bold('❌ Deployment Failed')}\n\n"
+                f"{pre(escape(error_message))}\n\n"
+                f"{bold('💡 Need help?')}\n"
+                f"• Review the error details above\n"
+                f"• Check your code for issues mentioned\n"
+                f"• Try again after fixing the problems\n"
+                f"• Contact support if issue persists",
+                reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
+                parse_mode=ParseMode.HTML,
             )
         else:
-            base_msg = (
-                bold("⚠️ Setup failed") + "\n"
-                + "Please double-check code, imports, and token. Try running locally: "
-                + code(f"python {pending.entry_name or 'your_file.py'}")
+            # Build user-friendly guidance for legacy error codes
+            base_msg = ""
+            if err == "docker_unavailable":
+                base_msg = (
+                    bold("⚠️ Hosting service not available") + "\n"
+                    + "The hosting service is currently busy or unavailable. Please try again later."
+                )
+            elif err == "build_error":
+                base_msg = (
+                    bold("⚠️ Build failed") + "\n"
+                    + "Some dependencies or imports could not be resolved.\n"
+                    + "• Check your requirements.txt (spelling and versions)\n"
+                    +"• Ensure entry file runs locally: " + code(f"python {pending.entry_name or 'your_file.py'}")
+                )
+            elif err == "no_entry_py":
+                base_msg = (
+                    bold("⚠️ Entry file not found") + "\n"
+                    + "Please upload a .py file (e.g., bot.py/app.py/main.py) or a zip with your code."
+                )
+            elif isinstance(err, str) and err.startswith("runtime_error:"):
+                # Surface concise runtime error line from container logs to help users fix quickly
+                detail = err.split(":", 1)[1].strip()
+                base_msg = (
+                    bold("⚠️ Runtime error") + "\n"
+                    + (detail + "\n" if detail else "")
+                    + "Try running locally: " + code(f"python {pending.entry_name or 'your_file.py'}")
+                )
+            else:
+                base_msg = (
+                    bold("⚠️ Setup failed") + "\n"
+                    + "Please double-check code, imports, and token. Try running locally: "
+                    + code(f"python {pending.entry_name or 'your_file.py'}")
+                )
+
+            # Ask the AI assistant for a concise fix suggestion
+            ctx_lines = [
+                f"user_id={message.from_user.id}",
+                f"bot_id={pending.bot_record_id}",
+                f"entry={pending.entry_name}",
+                f"error={err}",
+                "Goal: get Telegram bot running.",
+            ]
+            ai_tip = await asyncio.to_thread(suggest_fix, "\n".join([l for l in ctx_lines if l]))
+            tip_text = ("\n\n" + bold("Suggested fix") + ":\n" + ai_tip) if ai_tip else ""
+
+            await message.answer(
+                f"{bold('❌ Deployment Failed')}\n\n"
+                f"{base_msg}\n"
+                f"{tip_text}\n\n"
+                f"{bold('💡 What to do:')}\n"
+                f"• Review the error message above\n"
+                f"• Check your code for syntax errors\n"
+                f"• Verify requirements.txt is correct\n"
+                f"• Ensure your bot token is valid\n"
+                f"• Try uploading again after fixing issues\n\n"
+                f"If the problem persists, contact support.",
+                reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
+                parse_mode=ParseMode.HTML,
             )
-
-        # Ask the AI assistant for a concise fix suggestion
-        ctx_lines = [
-            f"user_id={message.from_user.id}",
-            f"bot_id={pending.bot_record_id}",
-            f"entry={pending.entry_name}",
-            f"error={err}",
-            "Goal: get Telegram bot running.",
-        ]
-        ai_tip = await asyncio.to_thread(suggest_fix, "\n".join([l for l in ctx_lines if l]))
-        tip_text = ("\n\n" + bold("Suggested fix") + ":\n" + ai_tip) if ai_tip else ""
-
-        await message.answer(
-            base_msg + tip_text,
-            reply_markup=main_menu(get_user(message.from_user.id).get("is_premium")),
-            parse_mode=ParseMode.HTML,
-        )
-        await state.clear()
-        return
+            # Cleanup workspace on failure
+            if pending.workspace:
+                try:
+                    remove_workspace(pending.workspace)
+                except Exception:
+                    pass
+            await state.clear()
+            return
 
     # Success
     plan = "premium" if user.get("is_premium") else "free"

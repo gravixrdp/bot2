@@ -1,0 +1,33 @@
+nohup: ignoring input
+Found 3 bot(s) to restart/rebuild.
+  - 3 running bot(s) that need rebuild with updated code
+
+============================================================
+Restarting bot: Keippo (ID: b7857898495-1762428860)
+Owner: 7857898495
+Workspace: /home/ubuntu/bot2/data/uploads/7857898495/b7857898495-1762428860
+✓ Token extracted: 7702141884...5hz-Q
+✓ Entry file: Robot.py
+🚀 Rebuilding and starting bot with updated code...
+✅ SUCCESS: Bot started! Runtime ID: dae43e928785e370aae9c1e27920405898fd25bb2230f89329b174aaabb1c2f6
+
+============================================================
+Restarting bot: bot (ID: b8186973947-1762510207)
+Owner: 8186973947
+Workspace: /home/ubuntu/bot2/data/uploads/8186973947/b8186973947-1762510207
+✓ Token extracted: 8041992730...X1inc
+✓ Entry file: bot.py
+🚀 Rebuilding and starting bot with updated code...
+✅ SUCCESS: Bot started! Runtime ID: 0c5bdc5d5e3f159aea161bcfc4e06b72993d44d69daade58885748312347bb8e
+
+============================================================
+Restarting bot: Compressor26Bot (ID: b7415661180-1762510236)
+Owner: 7415661180
+Workspace: /home/ubuntu/bot2/data/uploads/7415661180/b7415661180-1762510236
+✓ Token extracted: 8041992730...X1inc
+✓ Entry file: bot.py
+🚀 Rebuilding and starting bot with updated code...
+✅ SUCCESS: Bot started! Runtime ID: ba286b320e1a19c93ff8698cc0f64c98ba5a5334b02d14638f74f8aadfe3a2c0
+
+============================================================
+Done!
